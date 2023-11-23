@@ -1,9 +1,7 @@
 <?php
-if ( file_exists( __DIR__ . '/data.json' ) ) {
-	$GLOBALS['data'] = json_decode( file_get_contents( __DIR__ . '/data.json' ), true );
-} else {
-	$GLOBALS['data'] = [];
-}
+$GLOBALS['csvData'] = [];
+
+@unlink( __DIR__ . '/quality-vs-ratings-out.csv' );
 
 $GLOBALS['vendor_directories'] = [
 	'vendor',
@@ -12,22 +10,45 @@ $GLOBALS['vendor_directories'] = [
 ];
 
 register_shutdown_function( static function () {
-	file_put_contents( __DIR__ . '/data.json', json_encode( $GLOBALS['data'], JSON_PRETTY_PRINT ) );
+	// Save the data to a CSV File.
+	$csvFile = __DIR__ . '/quality-vs-ratings-out.csv';
+
+	$fileHandle = fopen( $csvFile, 'w' );
+
+	// Check if the file was opened successfully.
+	if ( $fileHandle === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $csvFile ) );
+	}
+
+	// Add headers.
+	fputcsv( $fileHandle, array_keys( $GLOBALS['csvData'][ array_rand( $GLOBALS['csvData'] ) ] ) );
+
+	// Iterate over the array to write each row to the CSV file.
+	foreach ( $GLOBALS['csvData'] as $row ) {
+		// Check each item in $row to ensure it's scalar.
+		foreach ( $row as $key => $value ) {
+			if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
+				throw new InvalidArgumentException( sprintf( 'Non-scalar value encountered at key "%s": %s', $key, print_r( $value, true ) ) );
+			}
+		}
+
+		fputcsv( $fileHandle, $row );
+	}
+
+	// Close the file handle.
+	fclose( $fileHandle );
 } );
 
-$csv = load_csv();
-maybe_download( $csv );
+load_csv();
+maybe_download();
+evaluate_tests();
+evaluate_support();
+evaluate_php_loc();
+evaluate_phpcs();
+evaluate_qit();
 
-if ( isset( $argv[1] ) ) {
-	if ( ! function_exists( $argv[1] ) ) {
-		throw new Exception( "Invalid action" );
-	}
-	$argv[1]();
-}
-
-function load_csv(): array {
+function load_csv() {
 	$csvFile = __DIR__ . '/quality-vs-ratings.csv';
-	$csvData = [];
 
 	if ( ( $handle = fopen( $csvFile, 'r' ) ) !== false ) {
 		// Get the first row of the CSV file as column headers
@@ -43,22 +64,15 @@ function load_csv(): array {
 				throw new Exception( "Invalid slug" );
 			}
 
-			$csvData[ $slug ] = array_combine( $headers, $row );
+			$GLOBALS['csvData'][ $slug ] = array_combine( $headers, $row );
 		}
 		fclose( $handle );
 	}
-
-	return $csvData;
 }
 
-function maybe_download( $csv ) {
-	$repos = [];
-
-	foreach ( $csv as $row ) {
-		$repos[ $row['Extension'] ] = $row['Repo'];
-	}
-
-	foreach ( $repos as $name => $repo ) {
+function maybe_download() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$repo = $row['Repo'];
 		$repo = rtrim( $repo, '/' );
 
 		// Slug is the last part of the URL.
@@ -72,22 +86,17 @@ function maybe_download( $csv ) {
 		$project_dir = __DIR__ . "/repos/$slug";
 
 		if ( ! file_exists( $project_dir ) ) {
-			passthru( "git clone $repo $project_dir" );
+			passthru( "git clone $repo_url $project_dir" );
 			sleep( 1 );
 
 			if ( ! file_exists( $project_dir ) ) {
-				throw new Exception( "Failed to clone $repo" );
+				throw new Exception( "Failed to clone $repo_url" );
 			}
 		}
 
-		if ( ! isset( $GLOBALS['data'][ $name ] ) ) {
-			$GLOBALS['data'][ $name ] = [
-				'slug'       => $slug,
-				'repo_dir'   => $project_dir,
-				'plugin_dir' => find_plugin_entrypoint( $project_dir ),
-				'url'        => $repo_url,
-			];
-		}
+		$row['Slug']      = $slug;
+		$row['RepoDir']   = $project_dir;
+		$row['PluginDir'] = find_plugin_entrypoint( $project_dir );
 	}
 }
 
@@ -142,11 +151,9 @@ function find_plugin_entrypoint( $dir ) {
 	throw new Exception( "No entry point found in $dir" );
 }
 
-function report() {
-	$playwright = [];
-
-	foreach ( $GLOBALS['data'] as $plugin_name => &$plugin_data ) {
-		$plugin_dir         = $plugin_data['plugin_dir'];
+function evaluate_tests() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$plugin_dir         = $row['PluginDir'];
 		$vendor_directories = $GLOBALS['vendor_directories'];
 		$test_directories   = [
 			'e2e'  => [
@@ -163,30 +170,63 @@ function report() {
 			]
 		];
 
+		$overrides = [
+			'woocommerce'        => [
+				'e2e'  => 'e2e-pw',
+				'unit' => 'php',
+			],
+			'woocommerce-blocks' => [
+				'unit' => 'php',
+			]
+		];
+
 		if ( file_exists( $plugin_dir . '/tests' ) ) {
 			$it = new DirectoryIterator( $plugin_dir . '/tests' );
 
-			$plugin_data['test_types'] = [
+			$debug['test_types'] = [
 				'known'   => [],
 				'unknown' => [],
 			];
 
+			$has_override = [];
+
 			foreach ( $it as $i ) {
 				$is_known = false;
 
-				/** @var SplFileObject $i */
+				/** @var SplFileInfo $i */
 				if ( $i->isDir() && ! $i->isDot() ) {
+					if ( array_key_exists( $row['Slug'], $overrides ) ) {
+						foreach ( $overrides[ $row['Slug'] ] as $type => $override ) {
+							if ( $i->getBasename() === $override ) {
+								$fn = "get_{$type}_framework_info";
+								$fn( $i->getPathname(), $row );
+
+								$debug['test_types']['known'][ $type ]['basename'] = $i->getBasename();
+								$debug['test_types']['known'][ $type ]['path']     = $i->getPathname();
+
+								$is_known       = true;
+								$has_override[] = $type;
+							}
+						}
+					}
+
 					foreach ( $test_directories as $type => $possible_values ) {
+						if ( in_array( $type, $has_override, true ) ) {
+							continue;
+						}
 						if ( in_array( $i->getBasename(), $possible_values, true ) ) {
-							$is_known                                                = true;
-							$plugin_data['test_types']['known'][ $type ]             = call_user_func( "get_{$type}_framework_info", $i->getPathname() );
-							$plugin_data['test_types']['known'][ $type ]['basename'] = $i->getBasename();
-							$plugin_data['test_types']['known'][ $type ]['path']     = $i->getPathname();
+							$is_known = true;
+
+							$fn = "get_{$type}_framework_info";
+							$fn( $i->getPathname(), $row );
+
+							$debug['test_types']['known'][ $type ]['basename'] = $i->getBasename();
+							$debug['test_types']['known'][ $type ]['path']     = $i->getPathname();
 						}
 					}
 
 					if ( ! $is_known ) {
-						$plugin_data['test_types']['unknown'][] = $i->getBasename();
+						$debug['test_types']['unknown'][] = $i->getBasename();
 					}
 				}
 			}
@@ -194,11 +234,7 @@ function report() {
 	}
 }
 
-function get_e2e_framework_info( string $path ): array {
-	$info = [
-		'framework' => '',
-	];
-
+function get_e2e_framework_info( string $path, array &$row ) {
 	$it = new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS );
 	$it = new RecursiveIteratorIterator( $it );
 
@@ -227,18 +263,18 @@ function get_e2e_framework_info( string $path ): array {
 			$fileContent = file_get_contents( $filePath );
 
 			// Look for the Codeception files, which should be "php" files ending in "Cest"
-			if ( $fileExtension === 'php' && strpos( $file->getPathname(), 'Cest.php' ) !== false ) {
+			if ( $fileExtension === 'php' && strpos( $file->getBasename(), 'Cest.php' ) !== false ) {
 				return 'Codeception';
 			}
 
-			// Look for the playwright in JS files
-			if ( $fileExtension === 'js' && strpos( $fileContent, 'playwright' ) !== false ) {
+			// Look for the playwright in JS and TS files
+			if ( in_array( $fileExtension, [ 'js', 'ts' ] ) && strpos( $fileContent, 'playwright' ) !== false ) {
 				return 'Playwright';
 			}
 		}
 	};
 
-	$info['framework'] = $find_framework( $path, $it );
+	$framework = $find_framework( $path, $it );
 
 	$count_Codeception_tests = static function ( RecursiveIteratorIterator $it ): array {
 		$count = [
@@ -281,10 +317,11 @@ function get_e2e_framework_info( string $path ): array {
 		];
 
 		foreach ( $it as $file ) {
-			if ( $file->isFile() && $file->getExtension() === 'js' ) {
+			// Check for both 'js' and 'ts' extensions
+			if ( $file->isFile() && ( $file->getExtension() === 'js' || $file->getExtension() === 'ts' ) ) {
 				$filename = $file->getFilename();
-				// Count the number of Playwright tests in files that end with .spec.js or .test.js.
-				if ( preg_match( '/\.(spec|test)\.js$/i', $filename ) ) {
+				// Update regex to match files that end with .spec.js, .test.js, .spec.ts, or .test.ts
+				if ( preg_match( '/\.(spec|test)\.(js|ts)$/i', $filename ) ) {
 					$contents = file_get_contents( $file->getPathname() );
 					// Count the number of test definitions.
 					$count['tests'] += substr_count( $contents, 'test(' );
@@ -295,34 +332,35 @@ function get_e2e_framework_info( string $path ): array {
 			}
 		}
 
+
 		return $count;
 	};
 
-	match ( $info['framework'] ) {
-		'Codeception' => $info['tests'] = $count_Codeception_tests( $it ),
-		'Playwright' => $info['tests'] = $count_Playwright_tests( $it ),
-		'Puppeteer' => $info['tests'] = $count_Playwright_tests( $it ),
-		default => $info['tests'] = 0,
-	};
+	switch ( $framework ) {
+		case 'Codeception':
+			$t = $count_Codeception_tests( $it );
 
-	return $info;
+			$row['wp-browser E2E Tests']     = $t['cests'] + $t['scenarios'];
+			$row['wp-browser E2E Tests Loc'] = $t['cests_loc'] + $t['scenarios_loc'];
+			break;
+		case 'Playwright':
+			$t = $count_Playwright_tests( $it );
+
+			$row['Playwright Tests']     = $t['tests'];
+			$row['Playwright Tests Loc'] = $t['tests_loc'];
+			break;
+		case 'Puppeteer':
+			$t = $count_Playwright_tests( $it );
+
+			$row['Puppeteer E2E Tests']     = $t['tests'];
+			$row['Puppeteer E2E Tests LOC'] = $t['tests_loc'];
+			break;
+	}
 }
 
-function get_unit_framework_info( string $path ): array {
-	$info = [
-		'framework' => '',
-	];
-
-	$find_framework = static function ( string $path ) {
-		$suiteFiles = glob( dirname( $path ) . '/*.suite.yml' );
-		if ( ! empty( $suiteFiles ) ) {
-			return 'Codeception';
-		} else {
-			return 'PHPUnit';
-		}
-	};
-
-	$info['framework'] = $find_framework( $path );
+function get_unit_framework_info( string $path, array &$row ) {
+	$suiteFiles = glob( dirname( $path ) . '/*.suite.yml' );
+	$framework  = empty( $suiteFiles ) ? 'PHPUnit' : 'Codeception';
 
 	$it = new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS );
 	$it = new RecursiveIteratorIterator( $it );
@@ -368,11 +406,157 @@ function get_unit_framework_info( string $path ): array {
 		return $count;
 	};
 
-	match ( $info['framework'] ) {
-		'Codeception' => $info['tests'] = $count_Codeception_tests( $it ),
-		'PHPUnit' => $info['tests'] = $count_PHPUnit_tests( $it ),
-		default => $info['tests'] = 0,
-	};
+	if ( $framework === 'Codeception' ) {
+		$t = $count_Codeception_tests( $it );
 
-	return $info;
+		$row['wp-browser Unit Tests']     = $t['tests'];
+		$row['wp-browser Unit Tests LOC'] = $t['tests_loc'];
+	} else {
+		$t = $count_PHPUnit_tests( $it );
+
+		$row['PHPUnit Tests']     = $t['tests'];
+		$row['PHPUnit Tests LOC'] = $t['tests_loc'];
+	}
+}
+
+function evaluate_support() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		if ( empty( $row['WPORG URL'] ) ) {
+			$row['WPORG Support Threads']          = '';
+			$row['WPORG Support Threads Resolved'] = '';
+			continue;
+		}
+
+		$slug = $row['Slug'];
+
+		$slug_overrides = [
+			'woocommerce-shipstation'     => 'woocommerce-shipstation-integration',
+			'woocommerce-blocks'          => 'woo-gutenberg-products-block',
+			'woocommerce-gateway-payfast' => 'woocommerce-payfast-gateway',
+		];
+
+		// Sometimes the WPORG slug is different from WOOCOM's.
+		if ( array_key_exists( $slug, $slug_overrides ) ) {
+			$slug = $slug_overrides[ $slug ];
+		}
+
+		$cache = __DIR__ . "/cache/wporg-$slug.json";
+
+		if ( ! file_exists( $cache ) ) {
+			sleep( 1 );
+			$response = file_get_contents( "https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&slug=$slug" );
+			if ( ! $response ) {
+				throw new \RuntimeException( "Could not get plugin info for $slug" );
+			}
+			if ( ! file_put_contents( $cache, $response ) ) {
+				throw new \RuntimeException( "Could not write plugin info for $slug" );
+			}
+		} else {
+			$response = file_get_contents( $cache );
+		}
+
+		$response = json_decode( $response, true );
+
+		$row['WPORG Support Threads']          = $response['support_threads'];
+		$row['WPORG Support Threads Resolved'] = $response['support_threads_resolved'];
+	}
+}
+
+function evaluate_php_loc() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$plugin_dir = $row['PluginDir'];
+
+		$it = new RecursiveDirectoryIterator( $plugin_dir, FilesystemIterator::SKIP_DOTS );
+		$it = new RecursiveIteratorIterator( $it );
+
+		$count_php_loc = static function ( RecursiveIteratorIterator $it ): int {
+			$count = 0;
+
+			foreach ( $it as $file ) {
+				if ( $file->isFile() && $file->getExtension() === 'php' ) {
+					// Skip vendor code.
+					foreach ( $GLOBALS['vendor_directories'] as $vendor_dir ) {
+						if ( str_contains( $file->getPathname(), "/$vendor_dir/" ) ) {
+							continue 2;
+						}
+					}
+
+					// Count non-empty lines of code.
+					$contents = file_get_contents( $file->getPathname() );
+					$count    += substr_count( trim( $contents ), "\n" ) + 1;
+				}
+			}
+
+			return $count;
+		};
+
+		$row['PHP LOC'] = $count_php_loc( $it );
+	}
+}
+
+function evaluate_phpcs() {
+	/**
+	 * Do a foreach on the csvData
+	 * Open a non-recursive Directory Iterator
+	 * Search for '.phpcs.xml', 'phpcs.xml', '.phpcs.xml.dist', 'phpcs.xml.dist'
+	 * If it has it, set $row['Code Style Tests'] to 'Yes', or 'No'
+	 */
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$plugin_dir = $row['PluginDir'];
+
+		$phpcs_config_files = [
+			'.phpcs.xml',
+			'phpcs.xml',
+			'.phpcs.xml.dist',
+			'phpcs.xml.dist',
+		];
+
+		$has_phpcs = false;
+
+		foreach ( $phpcs_config_files as $phpcs_file ) {
+			$phpcs_filepath = $plugin_dir . '/' . $phpcs_file;
+
+			if ( file_exists( $phpcs_filepath ) ) {
+				$has_phpcs = true;
+				break;
+			}
+		}
+
+		$row['Code Style Tests'] = $has_phpcs ? 'Yes' : 'No';
+	}
+}
+
+function evaluate_qit() {
+	/**
+	 * Do a foreach on the csvData
+	 * Open a non-recursive Directory Iterator on .github/workflows, if it exists
+	 * If it doesn't exist, set $row['QIT in CI'] to 'No'
+	 * It if exists, search for "qit:run" in all .yml files in that directory
+	 * Do a regex searching for what test type it runs, eg: run:activation, run:api, run:e2e, run:phpcompatibility, etc
+	 * Save the value of "QIT in CI" as a list of the test types it runs, separated by comma
+	 */
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$plugin_dir    = $row['PluginDir'];
+		$workflows_dir = $plugin_dir . '/.github/workflows';
+		$test_types    = [];
+
+		if ( file_exists( $workflows_dir ) && is_dir( $workflows_dir ) ) {
+			$it = new DirectoryIterator( $workflows_dir );
+			foreach ( $it as $fileinfo ) {
+				if ( $fileinfo->isFile() && $fileinfo->getExtension() === 'yml' ) {
+					$content = file_get_contents( $fileinfo->getPathname() );
+					// Regex to match 'qit run:<test_type>' pattern
+					if ( preg_match_all( '/qit\s+run:(\w+)/', $content, $matches ) ) {
+						$test_types = array_merge( $test_types, $matches[1] );
+					}
+				}
+			}
+		}
+
+		if ( empty( $test_types ) ) {
+			$row['QIT Integration'] = 'No';
+		} else {
+			$row['QIT Integration'] = implode( ',', array_unique( $test_types ) );
+		}
+	}
 }

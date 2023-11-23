@@ -9,3 +9,7 @@ node_modules/
 /tests/results.txt
 /data.json
 quality-vs-ratings.csv
+
+repos-original/
+
+quality-vs-ratings-out.csv
