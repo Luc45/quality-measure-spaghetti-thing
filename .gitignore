@@ -1,0 +1,11 @@
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/repos/
+/cache/
+/.idea/
+/tests/results.txt
+/data.json
+quality-vs-ratings.csv
