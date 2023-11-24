@@ -20,6 +20,17 @@ register_shutdown_function( static function () {
 		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $csvFile ) );
 	}
 
+	// Remove rows that do not need to be in the output CSV.
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		unset( $row['RepoDir'] );
+		unset( $row['PluginDir'] );
+		unset( $row['Repo'] );
+		unset( $row['WPORG URL'] );
+		unset( $row['WOOCOM URL'] );
+		unset( $row['Dependency Injection'] );
+		unset( $row['WOOCOM Installations'] ); // We don't have this.
+	}
+
 	// Add headers.
 	fputcsv( $fileHandle, array_keys( $GLOBALS['csvData'][ array_rand( $GLOBALS['csvData'] ) ] ) );
 
@@ -469,8 +480,42 @@ function evaluate_php_loc() {
 		$it = new RecursiveDirectoryIterator( $plugin_dir, FilesystemIterator::SKIP_DOTS );
 		$it = new RecursiveIteratorIterator( $it );
 
-		$count_php_loc = static function ( RecursiveIteratorIterator $it ): int {
-			$count = 0;
+		$count_php_metrics = static function ( RecursiveIteratorIterator $it ) use ( $plugin_dir ): array {
+			$metrics = [
+				'loc'                         => 0,
+				'public_functions'            => 0,
+				'protected_private_functions' => 0,
+				'static_functions'            => 0,
+				'self_static_usage'           => 0,
+				'has_autoloader'              => 'No',
+				'requires'                    => 0,
+				'class_injections'            => 0,
+			];
+
+			// Check for composer.json with autoload.
+			$composer_path = $plugin_dir . '/composer.json';
+			if ( file_exists( $composer_path ) ) {
+				$composer_config = json_decode( file_get_contents( $composer_path ), true );
+				if ( ! empty( $composer_config['autoload'] ) ) {
+					$metrics['has_autoloader'] = 'Composer';
+				}
+			}
+
+			$nonClassTypes        = [
+				'int',
+				'float',
+				'string',
+				'bool',
+				'boolean',
+				'array',
+				'iterable',
+				'callable',
+				'mixed',
+				'resource',
+				'null',
+				'void'
+			];
+			$patternNonClassTypes = implode( '|', $nonClassTypes );
 
 			foreach ( $it as $file ) {
 				if ( $file->isFile() && $file->getExtension() === 'php' ) {
@@ -482,16 +527,72 @@ function evaluate_php_loc() {
 					}
 
 					// Count non-empty lines of code.
-					$contents = file_get_contents( $file->getPathname() );
-					$count    += substr_count( trim( $contents ), "\n" ) + 1;
+					$contents                               = file_get_contents( $file->getPathname() );
+					$metrics['loc']                         += substr_count( trim( $contents ), "\n" ) + 1;
+					$metrics['public_functions']            += preg_match_all( '/\bpublic function\b/', $contents );
+					$metrics['protected_private_functions'] += preg_match_all( '/\b(protected|private) function\b/', $contents );
+					$metrics['static_functions']            += preg_match_all( '/\b(public|protected|private) static function\b/', $contents );
+					$metrics['self_static_usage']           += substr_count( $contents, 'self::' );
+					$metrics['self_static_usage']           += substr_count( $contents, 'static::' );
+
+					// Tokenize the file contents and count the specific statements.
+					$tokens = token_get_all( $contents );
+
+					foreach ( $tokens as $token ) {
+						if ( is_array( $token ) ) {
+							switch ( $token[0] ) {
+								case T_REQUIRE:
+								case T_REQUIRE_ONCE:
+								case T_INCLUDE:
+								case T_INCLUDE_ONCE:
+									$metrics['requires'] ++;
+									break;
+							}
+						}
+					}
+
+					// Match all class constructors.
+					preg_match_all( '/function\s+__construct\s*\(([^)]*)\)/', $contents, $constructors );
+
+					foreach ( $constructors[1] as $constructor ) {
+						// Break parameters by comma and filter out empty entries.
+						$params = array_filter( array_map( 'trim', explode( ',', $constructor ) ) );
+
+						foreach ( $params as $param ) {
+							// Check if the parameter has a type hint and is not a non-class type.
+							if ( preg_match( '/^(?:' . $patternNonClassTypes . ')\s+\$/', $param ) === 0 ) {
+								$metrics['class_injections'] ++;
+							}
+						}
+					}
 				}
 			}
 
-			return $count;
+			// Calculate the percentage of static vs non-static functions
+			$total_functions              = $metrics['public_functions'] + $metrics['protected_private_functions'];
+			$metrics['static_percentage'] = $total_functions > 0 ? ( $metrics['static_functions'] / $total_functions ) * 100 : 0;
+
+			// Calculate the encapsulation percentage (public vs non-public)
+			$metrics['encapsulation_percentage'] = $total_functions > 0 ? ( $metrics['protected_private_functions'] / $total_functions ) * 100 : 0;
+
+			return $metrics; // This should be outside the foreach loop over $it
 		};
 
-		$row['PHP LOC'] = $count_php_loc( $it );
+		$metrics = $count_php_metrics( $it );
+
+		// Assign the metrics to the respective row fields
+		$row['PHP LOC']                         = $metrics['loc'];
+		$row['Public Functions']                = $metrics['public_functions'];
+		$row['Protected/Private Functions']     = $metrics['protected_private_functions'];
+		$row['Static Functions']                = $metrics['static_functions'];
+		$row['Static vs Non-Static Percentage'] = intval( $metrics['static_percentage'] ) . '%';
+		$row['Encapsulation Percentage']        = intval( $metrics['encapsulation_percentage'] ) . '%';
+		$row['self::/static:: Usage']           = $metrics['self_static_usage'];
+		$row['Autoloader']                      = $metrics['has_autoloader'];
+		$row['Require/Include']                 = $metrics['requires'];
+		$row['Class Injections']                = $metrics['class_injections'];
 	}
+	unset( $row ); // Unset the reference to prevent potential issues later
 }
 
 function evaluate_phpcs() {
