@@ -22,13 +22,15 @@ register_shutdown_function( static function () {
 
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
-		unset( $row['PluginDir'] );
-		unset( $row['RepoDir'] );
-		unset( $row['WPORG URL'] );
-		unset( $row['Maintainer'] );
-		unset( $row['WOOCOM URL'] );
-		unset( $row['Dependency Injection'] );
-		unset( $row['WOOCOM Installations'] ); // We don't have this.
+		unset(
+			$row['PluginDir'],
+			$row['RepoDir'],
+			$row['WPORG URL'],
+			$row['Maintainer'],
+			$row['WOOCOM URL'],
+			$row['Dependency Injection'],
+			$row['WOOCOM Installations'],
+		);
 
 		// Move to the end.
 		$repo = $row['Repo'];
@@ -36,11 +38,26 @@ register_shutdown_function( static function () {
 		$row['Repo'] = $repo;
 	}
 
+	$data = [];
+
+	// Set the order of some columns.
+	foreach ( $GLOBALS['csvData'] as $key => &$row ) {
+		$data[ $key ]                      = [];
+		$data[ $key ]['Extension']         = $row['﻿Extension'];
+		$data[ $key ]['Aggregated Rating'] = $row['Aggregated Rating'];
+
+		unset(
+			$row['﻿Extension'],
+			$row['Aggregated Rating']
+		);
+		$data[ $key ]                      = array_merge( $data[ $key ], $row );
+	}
+
 	// Add headers.
-	fputcsv( $fileHandle, array_keys( $GLOBALS['csvData'][ array_rand( $GLOBALS['csvData'] ) ] ) );
+	fputcsv( $fileHandle, array_keys( $data[ array_rand( $data ) ] ) );
 
 	// Iterate over the array to write each row to the CSV file.
-	foreach ( $GLOBALS['csvData'] as $foo => $r ) {
+	foreach ( $data as $foo => $r ) {
 		// Check each item in $row to ensure it's scalar.
 		foreach ( $r as $key => $value ) {
 			if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
