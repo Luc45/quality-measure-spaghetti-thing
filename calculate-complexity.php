@@ -22,28 +22,33 @@ register_shutdown_function( static function () {
 
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
-		unset( $row['RepoDir'] );
 		unset( $row['PluginDir'] );
-		unset( $row['Repo'] );
+		unset( $row['RepoDir'] );
 		unset( $row['WPORG URL'] );
+		unset( $row['Maintainer'] );
 		unset( $row['WOOCOM URL'] );
 		unset( $row['Dependency Injection'] );
 		unset( $row['WOOCOM Installations'] ); // We don't have this.
+
+		// Move to the end.
+		$repo = $row['Repo'];
+		unset( $row['Repo'] );
+		$row['Repo'] = $repo;
 	}
 
 	// Add headers.
 	fputcsv( $fileHandle, array_keys( $GLOBALS['csvData'][ array_rand( $GLOBALS['csvData'] ) ] ) );
 
 	// Iterate over the array to write each row to the CSV file.
-	foreach ( $GLOBALS['csvData'] as $row ) {
+	foreach ( $GLOBALS['csvData'] as $foo => $r ) {
 		// Check each item in $row to ensure it's scalar.
-		foreach ( $row as $key => $value ) {
+		foreach ( $r as $key => $value ) {
 			if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
 				throw new InvalidArgumentException( sprintf( 'Non-scalar value encountered at key "%s": %s', $key, print_r( $value, true ) ) );
 			}
 		}
 
-		fputcsv( $fileHandle, $row );
+		fputcsv( $fileHandle, $r );
 	}
 
 	// Close the file handle.
@@ -57,6 +62,8 @@ evaluate_support();
 evaluate_php_loc();
 evaluate_phpcs();
 evaluate_qit();
+correlate_tests_and_code_locs();
+add_aggregated_rating();
 
 function load_csv() {
 	$csvFile = __DIR__ . '/quality-vs-ratings.csv';
@@ -466,10 +473,20 @@ function evaluate_support() {
 			$response = file_get_contents( $cache );
 		}
 
-		$response = json_decode( $response, true );
+		$plugin_info = json_decode( $response, true );
 
-		$row['WPORG Support Threads']          = $response['support_threads'];
-		$row['WPORG Support Threads Resolved'] = $response['support_threads_resolved'];
+		$row['WPORG Support Threads'] = $plugin_info['support_threads'] ?? '';
+		$resolved_threads             = $plugin_info['support_threads_resolved'] ?? 0;
+		$total_threads                = $plugin_info['support_threads'] ?? 0;
+
+		// Calculate the percentage of resolved threads
+		if ( $total_threads > 0 ) {
+			$resolved_percentage = ( $resolved_threads / $total_threads ) * 100;
+			// Format the resolved percentage with two decimal places
+			$row['WPORG Support Threads Resolved'] = round( $resolved_percentage, 2 ) . '%';
+		} else {
+			$row['WPORG Support Threads Resolved'] = '';
+		}
 	}
 }
 
@@ -490,6 +507,8 @@ function evaluate_php_loc() {
 				'has_autoloader'              => 'No',
 				'requires'                    => 0,
 				'class_injections'            => 0,
+				'num_php_files'               => 0,
+				'num_classes'                 => 0,
 			];
 
 			// Check for composer.json with autoload.
@@ -500,6 +519,8 @@ function evaluate_php_loc() {
 					$metrics['has_autoloader'] = 'Composer';
 				}
 			}
+
+			$spl_autoload_register = 0;
 
 			$nonClassTypes        = [
 				'int',
@@ -519,6 +540,7 @@ function evaluate_php_loc() {
 
 			foreach ( $it as $file ) {
 				if ( $file->isFile() && $file->getExtension() === 'php' ) {
+					$metrics['num_php_files'] ++;
 					// Skip vendor code.
 					foreach ( $GLOBALS['vendor_directories'] as $vendor_dir ) {
 						if ( str_contains( $file->getPathname(), "/$vendor_dir/" ) ) {
@@ -534,6 +556,12 @@ function evaluate_php_loc() {
 					$metrics['static_functions']            += preg_match_all( '/\b(public|protected|private) static function\b/', $contents );
 					$metrics['self_static_usage']           += substr_count( $contents, 'self::' );
 					$metrics['self_static_usage']           += substr_count( $contents, 'static::' );
+					$metrics['num_classes']                 += substr_count( $contents, 'class ' );
+
+					// Count how many spl_autoload_register it has, and add it to "has_autoloader" like this: "1 spl_autoload_register"
+					if ( $metrics['has_autoloader'] !== 'Composer' ) {
+						$spl_autoload_register += substr_count( $contents, 'spl_autoload_register' );
+					}
 
 					// Tokenize the file contents and count the specific statements.
 					$tokens = token_get_all( $contents );
@@ -568,12 +596,18 @@ function evaluate_php_loc() {
 				}
 			}
 
+			if ( $metrics['has_autoloader'] !== 'Composer' && $spl_autoload_register > 0 ) {
+				$metrics['has_autoloader'] = "$spl_autoload_register spl_autoload_register";
+			}
+
 			// Calculate the percentage of static vs non-static functions
 			$total_functions              = $metrics['public_functions'] + $metrics['protected_private_functions'];
 			$metrics['static_percentage'] = $total_functions > 0 ? ( $metrics['static_functions'] / $total_functions ) * 100 : 0;
 
 			// Calculate the encapsulation percentage (public vs non-public)
 			$metrics['encapsulation_percentage'] = $total_functions > 0 ? ( $metrics['protected_private_functions'] / $total_functions ) * 100 : 0;
+
+			$metrics['ratio_methods_and_classes'] = $metrics['num_classes'] > 0 ? number_format( $total_functions / $metrics['num_classes'], 2 ) : 0;
 
 			return $metrics; // This should be outside the foreach loop over $it
 		};
@@ -591,6 +625,7 @@ function evaluate_php_loc() {
 		$row['Autoloader']                      = $metrics['has_autoloader'];
 		$row['Require/Include']                 = $metrics['requires'];
 		$row['Class Injections']                = $metrics['class_injections'];
+		$row['Ratio Methods and Classes']       = $metrics['ratio_methods_and_classes'];
 	}
 	unset( $row ); // Unset the reference to prevent potential issues later
 }
@@ -658,6 +693,42 @@ function evaluate_qit() {
 			$row['QIT Integration'] = 'No';
 		} else {
 			$row['QIT Integration'] = implode( ',', array_unique( $test_types ) );
+		}
+	}
+}
+
+function correlate_tests_and_code_locs() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		// Use null coalescing operator to set default to 0 if not set
+		$code_loc       = (int) $row['PHP LOC'] ?? 0;
+		$unit_test_locs = (int) $row['PHPUnit Tests LOC'] + (int) $row['wp-browser Unit Tests LOC'];
+		$e2e_test_locs  = (int) $row['Playwright Tests Loc'] + (int) $row['Puppeteer E2E Tests LOC'] + (int) $row['wp-browser E2E Tests Loc'];
+
+		// Calculate the proportions as percentages, using shorthand ternary operator to avoid division by zero
+		$unit_proportion_percentage = $code_loc > 0 ? ( $unit_test_locs / $code_loc ) * 100 : 0;
+		$e2e_proportion_percentage  = $code_loc > 0 ? ( $e2e_test_locs / $code_loc ) * 100 : 0;
+
+		// Optionally, add the proportions as percentages to the row itself if you want to keep track within the data set
+		$row['Unit Tests to Code LOC'] = (int) $unit_proportion_percentage . '%';
+		$row['E2E Tests to Code LOC']  = (int) $e2e_proportion_percentage . '%';
+	}
+}
+
+function add_aggregated_rating() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$wporg_rating  = (float) $row['WPORG Rating'];
+		$woocom_rating = (float) $row['WOOCOM Rating'];
+
+		// Check if both ratings are higher than zero
+		if ( $wporg_rating > 0 && $woocom_rating > 0 ) {
+			// Calculate the average of both ratings if both are set
+			$row['Aggregated Rating'] = ( $wporg_rating + $woocom_rating ) / 2;
+		} elseif ( $wporg_rating > 0 || $woocom_rating > 0 ) {
+			// Use the one rating that is set if the other is zero
+			$row['Aggregated Rating'] = max( $wporg_rating, $woocom_rating );
+		} else {
+			// Set to empty string if both ratings are zero
+			$row['Aggregated Rating'] = '';
 		}
 	}
 }
