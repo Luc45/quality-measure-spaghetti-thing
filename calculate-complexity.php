@@ -50,7 +50,7 @@ register_shutdown_function( static function () {
 			$row['﻿Extension'],
 			$row['Aggregated Rating']
 		);
-		$data[ $key ]                      = array_merge( $data[ $key ], $row );
+		$data[ $key ] = array_merge( $data[ $key ], $row );
 	}
 
 	// Add headers.
@@ -81,6 +81,9 @@ evaluate_phpcs();
 evaluate_qit();
 correlate_tests_and_code_locs();
 add_aggregated_rating();
+evaluate_bus_factor();
+evaluate_php_activity_hercules();
+//evaluate_php_activity();
 
 function load_csv() {
 	$csvFile = __DIR__ . '/quality-vs-ratings.csv';
@@ -140,6 +143,7 @@ function find_plugin_entrypoint( $dir ) {
 
 	$hardcoded_map = [
 		'/repos/woocommerce/' => 'plugins/woocommerce',
+		#'/repos/mailpoet/' => 'mailpoet',
 	];
 
 	// See if there's a hardcoded mapping for this repo.
@@ -528,6 +532,12 @@ function evaluate_php_loc() {
 				'num_classes'                 => 0,
 			];
 
+			$command = "find $plugin_dir -path '*/tests/*' -prune -o -name '*.php' -exec wc -l {} +";
+			exec( $command, $loc_output );
+			$metrics['loc'] = array_sum( array_filter( $loc_output, static function ( $line ) {
+				return (int) preg_match( '/^\s*\d+\s+total$/', $line );
+			} ) );
+
 			// Check for composer.json with autoload.
 			$composer_path = $plugin_dir . '/composer.json';
 			if ( file_exists( $composer_path ) ) {
@@ -567,7 +577,6 @@ function evaluate_php_loc() {
 
 					// Count non-empty lines of code.
 					$contents                               = file_get_contents( $file->getPathname() );
-					$metrics['loc']                         += substr_count( trim( $contents ), "\n" ) + 1;
 					$metrics['public_functions']            += preg_match_all( '/\bpublic function\b/', $contents );
 					$metrics['protected_private_functions'] += preg_match_all( '/\b(protected|private) function\b/', $contents );
 					$metrics['static_functions']            += preg_match_all( '/\b(public|protected|private) static function\b/', $contents );
@@ -631,6 +640,14 @@ function evaluate_php_loc() {
 
 		$metrics = $count_php_metrics( $it );
 
+		$autoload_overrides = [
+			'woocommerce-square' => 'Composer',
+		];
+
+		if ( array_key_exists( $row['Slug'], $autoload_overrides ) && ! empty( $autoload_overrides[ $row['Slug'] ] ) ) {
+			$metrics['has_autoloader'] = $autoload_overrides[ $row['Slug'] ];
+		}
+
 		// Assign the metrics to the respective row fields
 		$row['PHP LOC']                         = $metrics['loc'];
 		$row['Public Functions']                = $metrics['public_functions'];
@@ -656,6 +673,11 @@ function evaluate_phpcs() {
 	 */
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		$plugin_dir = $row['PluginDir'];
+		$repo_dir   = $row['RepoDir'];
+
+		$hardcodes = [
+			'mailpoet' => true,
+		];
 
 		$phpcs_config_files = [
 			'.phpcs.xml',
@@ -664,14 +686,28 @@ function evaluate_phpcs() {
 			'phpcs.xml.dist',
 		];
 
-		$has_phpcs = false;
+		$has_phpcs = array_key_exists( $row['Slug'], $hardcodes ) && $hardcodes[ $row['Slug'] ];
 
-		foreach ( $phpcs_config_files as $phpcs_file ) {
-			$phpcs_filepath = $plugin_dir . '/' . $phpcs_file;
+		// Plugin Dir.
+		if ( ! $has_phpcs ) {
+			foreach ( $phpcs_config_files as $phpcs_file ) {
+				$phpcs_filepath = $plugin_dir . '/' . $phpcs_file;
 
-			if ( file_exists( $phpcs_filepath ) ) {
-				$has_phpcs = true;
-				break;
+				if ( file_exists( $phpcs_filepath ) ) {
+					$has_phpcs = true;
+					break;
+				}
+			}
+		}
+
+		if ( ! $has_phpcs ) {
+			foreach ( $phpcs_config_files as $phpcs_file ) {
+				$phpcs_filepath = $repo_dir . '/' . $phpcs_file;
+
+				if ( file_exists( $phpcs_filepath ) ) {
+					$has_phpcs = true;
+					break;
+				}
 			}
 		}
 
@@ -748,4 +784,355 @@ function add_aggregated_rating() {
 			$row['Aggregated Rating'] = '';
 		}
 	}
+}
+
+function evaluate_bus_factor() {
+	$calculateBusFactor = function ( $ownershipData ): string {
+		$contributors  = $ownershipData['names'];
+		$contributions = $ownershipData['people'];
+
+		// Calculate the total LOC for each contributor across all date ranges
+		$totalLocPerContributor = array_map( 'array_sum', $contributions );
+
+		// Calculate the total LOC for the entire project
+		$totalLocProject = array_sum( $totalLocPerContributor );
+
+		// Calculate the percentage of code ownership for each contributor
+		$ownershipPercentages = array_map( function ( $loc ) use ( $totalLocProject ) {
+			return ceil( ( $loc / $totalLocProject ) * 100 );
+		}, $totalLocPerContributor );
+
+		// Sort the contributors by percentage in descending order
+		arsort( $ownershipPercentages );
+
+		// Get the top three contributors
+		$topThreeContributors = array_slice( $ownershipPercentages, 0, 3, true );
+
+		// Create an array of strings with the name and percentage
+		$topContributorsWithNames = [];
+		foreach ( $topThreeContributors as $index => $percentage ) {
+			$name                       = substr( $contributors[ $index ], 0, 10 ); // Trim the name to 10 characters
+			$topContributorsWithNames[] = $percentage . '% ' . $name;
+		}
+
+		// Return a scalar string with each contributor on a new line
+		return implode( "\n", $topContributorsWithNames );
+	};
+
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+
+		$repo_dir = $row['RepoDir'];
+
+		$cache_dir      = __DIR__ . '/cache/';
+		$cache_filename = 'hercules-ownership-' . $row['Slug'] . '.json';
+		$cache_filepath = $cache_dir . $cache_filename;
+
+		/*
+		 * See if cache exists.
+		 * If yes, use cached json.
+		 * If not, run a command based on this:
+		 *  docker run --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --burndown --burndown-people --first-parent --devs --languages php /repo | docker run --rm -i -v $(pwd):/io --user $(id -u):$(id -g) srcd/hercules labours -m ownership -o /io/results-php.svg
+		 * Cache the JSON
+		 * Run $calculateBusFactor on the JSON
+		 * Add it to the row as BusFactor
+		 */
+		if ( ! file_exists( $cache_filepath ) ) {
+			// Navigate to the repository directory.
+			chdir( $repo_dir );
+
+			// Define the hercules command
+			$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --burndown --burndown-people --first-parent --devs /repo | docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -i -v $cache_dir:/cache --user $(id -u):$(id -g) srcd/hercules labours -m ownership -o /cache/$cache_filename";
+
+			// Execute the hercules command and redirect output to a file
+			exec( $herculesCommand, $output, $return_var );
+
+			if ( $return_var !== 0 ) {
+				echo "Hercules command failed with error code: {$return_var}\n";
+				die( 1 );
+			}
+		}
+
+		$ownershipData    = json_decode( file_get_contents( $cache_filepath ), true );
+		$row['BusFactor'] = $calculateBusFactor( $ownershipData ) . '%';
+	}
+}
+
+function evaluate_php_activity_hercules() {
+	$languages = [ 'php', 'javascript' ];
+
+	foreach ( $languages as $lang ) {
+		$longest_graphs = [];
+		foreach ( $GLOBALS['csvData'] as &$row ) {
+			$repo_dir = $row['RepoDir'];
+
+			$yml_cache_dir      = __DIR__ . '/cache/hercules/';
+			$yml_cache_filename = "hercules-devs-$lang-{$row['Slug']}.yml";
+			$yml_cache_filepath = $yml_cache_dir . $yml_cache_filename;
+
+			/*
+			 * See if cache exists.
+			 * If yes, use cached json.
+			 * If not, run a command based on this:
+			 *  docker run --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --burndown --burndown-people --first-parent --devs --languages php /repo | docker run --rm -i -v $(pwd):/io --user $(id -u):$(id -g) srcd/hercules labours -m ownership -o /io/results-php.svg
+			 * Cache the JSON
+			 * Run $calculateBusFactor on the JSON
+			 * Add it to the row as BusFactor
+			 */
+			if ( ! file_exists( $yml_cache_filepath ) ) {
+				// Navigate to the repository directory.
+				chdir( $repo_dir );
+
+				// Define the hercules command
+				$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --first-parent --devs --languages $lang /repo > $yml_cache_filepath";
+
+				// Execute the hercules command and redirect output to a file
+				exec( $herculesCommand, $output, $return_var );
+
+				if ( $return_var !== 0 ) {
+					echo "Hercules command failed with error code: {$return_var}\n";
+					die( 1 );
+				}
+			}
+
+			$generate_text = true;
+
+
+			$img_cache_filename = sprintf( '%s%s-hpa.%s', $lang === 'javascript' ? 'js' : 'php', substr( $row['Slug'], 0, 55 ), $generate_text ? 'txt' : 'svg' );
+			$img_cache_dir      = __DIR__ . '/cache/imgs/';
+			$img_cache_filepath = $img_cache_dir . $img_cache_filename;
+
+			if ( ! file_exists( $img_cache_filepath ) ) {
+				$pythonEnvPath    = __DIR__ . '/hercules/python/mynewenv/bin/python';
+				$pythonScriptPath = __DIR__ . '/hercules/python/labours';
+
+				if ( $generate_text ) {
+					$pythonCommand = "HERCULES_SPARKLINE_MODE=true HERCULES_SPARKLINE_GOOGLE_MODE=true $pythonEnvPath $pythonScriptPath -m old-vs-new -i $yml_cache_filepath > $img_cache_filepath";
+				} else {
+					$pythonCommand = "$pythonEnvPath $pythonScriptPath -m old-vs-new -i $yml_cache_filepath -o $img_cache_filepath";
+				}
+
+				// Execute the Python command
+				passthru( $pythonCommand, $return_var );
+
+				if ( $return_var !== 0 ) {
+					echo "Python command failed with error code: {$return_var}\n";
+					die( 1 );
+				}
+			}
+
+			if ( $generate_text ) {
+				foreach ( file( $img_cache_filepath ) as $line ) {
+					if ( ! str_contains( $line, '||||' ) && ! str_contains( $line, 'Google' ) ) {
+						continue;
+					}
+					[ $columnName, $data ] = explode( '||||', $line, 2 );
+					$row[ $columnName ] = trim( $data );
+
+					if ( ! array_key_exists( $columnName, $longest_graphs ) ) {
+						$longest_graphs[ $columnName ] = 0;
+					}
+
+					preg_match( '/=SPARKLINE\(\{([^}]+)\}/', $data, $matches );
+					$length = count( explode( ',', $matches[1] ) );
+
+					if ( $length > $longest_graphs[ $columnName ] ) {
+						$longest_graphs[ $columnName ] = $length;
+					}
+				}
+			} else {
+				$row['PHP Activity'] = sprintf( '=IMAGE("https://stagingcompatibilitydashboard.wpcomstaging.com/wp-content/uploads/php-activity/%s", 2)', $img_cache_filename );
+			}
+		}
+
+		foreach ( $longest_graphs as $column => $maxLength ) {
+			foreach ( $GLOBALS['csvData'] as &$row ) {
+				if ( isset( $row[ $column ] ) ) {
+					// Match the numerical data within the SPARKLINE structure
+					if ( preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $row[ $column ], $matches ) ) {
+						$graphNumbers  = explode( ',', $matches[1] );
+						$currentLength = count( $graphNumbers );
+
+						if ( $currentLength < $maxLength ) {
+							// Pad the graph with zeros from the left
+							$padding     = array_fill( 0, $maxLength - $currentLength, '0' );
+							$paddedGraph = implode( ',', array_merge( $padding, $graphNumbers ) );
+
+							unset( $row[ $column ] );
+
+							// Replace the numerical data part of the SPARKLINE string
+							$row[ sprintf( '(%s) %s', $lang, $column ) ] = '=SPARKLINE({' . $paddedGraph . '}' . $matches[2];
+						}
+					}
+				}
+			}
+			unset( $row ); // Unset the reference to the last element
+		}
+	}
+}
+
+function evaluate_php_activity() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$repo_dir   = $row['RepoDir'];
+		$plugin_dir = $row['PluginDir'];
+
+		$cache_file = __DIR__ . '/cache/git-log-' . $row['Slug'] . '.json';
+
+		$months = 2;
+
+		// Check if the cache file exists
+		if ( file_exists( $cache_file ) ) {
+			// Load the cached data
+			$cached_data        = json_decode( file_get_contents( $cache_file ), true );
+			$linesOfCodeChanges = $cached_data['LinesOfCodeChanges'];
+		} else {
+			// Navigate to the repository directory.
+			chdir( $repo_dir );
+
+			// Get the date of the first commit.
+			$firstCommitDate = trim( exec( "git log --format='%cd' --date=short --reverse | head -1" ) );
+
+			if ( ! preg_match( '/\d{4}-\d{2}-\d{2}/', $firstCommitDate ) ) {
+				echo "Invalid first commit date for plugin " . $row['PluginName'] . "\n";
+				continue;
+			}
+
+			$linesOfCodeChanges = [];
+			$currentDate        = $firstCommitDate;
+			$endDate            = date( 'Y-m-d' ); // Today's date as the end date.
+			$cumulativeFiles    = [];
+
+			while ( strtotime( $currentDate ) < strtotime( $endDate ) ) {
+				$periodEndDate = date( 'Y-m-d', strtotime( "+{$months}months", strtotime( $currentDate ) ) );
+				$file_path     = sprintf( '%s/git-output-%s-%s.txt', sys_get_temp_dir(), $row['Slug'], uniqid() );
+
+				// Define the git log command
+				$gitLogCommand = "git log --since='{$currentDate}' --until='{$periodEndDate}' --numstat --pretty=format:'%H' -- '{$plugin_dir}'/**/*.php > $file_path";
+
+				// Execute the git log command and redirect output to a file
+				exec( $gitLogCommand, $output, $return_var );
+
+				if ( $return_var !== 0 ) {
+					echo "Git command failed with error code: {$return_var}\n";
+				} else {
+					// Read the output from the file
+					$output = file( $file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
+
+					// Optionally, delete the file if you no longer need it
+					unlink( $file_path );
+				}
+
+				$addedLines   = 0;
+				$removedLines = 0;
+				$filesParsed  = [];
+
+				foreach ( $output as $line ) {
+					$changes = preg_split( '/\s+/', $line );
+					if ( count( $changes ) === 3 && ! in_array( $changes[2], $GLOBALS['vendor_directories'] ) ) {
+						$addedLines        += (int) $changes[0];
+						$removedLines      += (int) $changes[1];
+						$filesParsed[]     = $changes[2];
+						$cumulativeFiles[] = $changes[2];
+					}
+				}
+
+				$linesOfCodeChanges[] = [
+					'startDate' => $currentDate,
+					'endDate'   => $periodEndDate,
+					'added'     => $addedLines,
+					'removed'   => $removedLines,
+					'files'     => array_unique( $filesParsed ),
+				];
+
+				$currentDate = $periodEndDate;
+			}
+
+			// Cache the raw data to a file
+			file_put_contents( $cache_file, json_encode( [
+				'LinesOfCodeChanges' => $linesOfCodeChanges,
+			] ) );
+		}
+
+		$linesOfCodeChanges = aggregate_changes( $linesOfCodeChanges, $months );
+
+		// First loop to find the max net change for the plugin
+		$max_net_change = 0;
+		foreach ( $linesOfCodeChanges as $change ) {
+			$net_change     = $change['added'] + $change['removed'];
+			$max_net_change = max( $max_net_change, $net_change );
+		}
+
+		// String to accumulate the visual history
+		$development_speed_relative = "";
+		$development_speed_absolute = "";
+
+		$totalEstimated = 0;
+
+		// Second loop to generate the visual history of net changes
+		foreach ( $linesOfCodeChanges as &$change ) {
+			$net_change                 = $change['added'] + $change['removed'];
+			$totalEstimated             += $change['added'] - $change['removed'];
+			$development_speed_relative .= generate_single_bar( $net_change, $max_net_change );
+		}
+
+		// Second loop to generate the visual history of net changes
+		foreach ( $linesOfCodeChanges as &$change ) {
+			$net_change                 = $change['added'] + $change['removed'];
+			$development_speed_absolute .= generate_single_bar( $net_change, $months * 1000 );
+		}
+
+		// Add the visual history to the plugin's data
+		$row['PHP Activity Estimated (Relative to itself)']                                                                                          = $development_speed_relative;
+		$row[ sprintf( 'PHP Activity Estimated (Relative to %d PHP LOC every %s)', $months * 1000, $months === 1 ? 'month' : $months . ' months' ) ] = $development_speed_absolute;
+	}
+}
+
+function aggregate_changes( $linesOfCodeChanged, $periodMonths ) {
+	$aggregatedChanges = [];
+	$aggregatedAdded   = 0;
+	$aggregatedRemoved = 0;
+	$count             = 0;
+
+	foreach ( $linesOfCodeChanged as $month => $change ) {
+		$aggregatedAdded   += $change['added'];
+		$aggregatedRemoved += $change['removed'];
+		$count ++;
+
+		// Every periodMonths, push the aggregated data and reset
+		if ( $count === $periodMonths ) {
+			$aggregatedChanges[] = [
+				'added'   => $aggregatedAdded,
+				'removed' => $aggregatedRemoved,
+			];
+			$aggregatedAdded     = 0;
+			$aggregatedRemoved   = 0;
+			$count               = 0;
+		}
+	}
+
+	// Add any remaining data if the last period is not complete
+	if ( $count > 0 ) {
+		$aggregatedChanges[] = [
+			'added'   => $aggregatedAdded,
+			'removed' => $aggregatedRemoved,
+		];
+	}
+
+	unset(
+		$linesOfCodeChanged['added'],
+		$linesOfCodeChanged['removed'],
+	);
+
+	return array_merge( $linesOfCodeChanged, $aggregatedChanges );
+}
+
+function generate_single_bar( $net_change, $max_value ) {
+	$bar_chars = [ "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" ]; // Gradient characters from low to high
+	if ( $max_value > 0 ) {
+		// Calculate the index within the bounds of the bar_chars array
+		$index = min( count( $bar_chars ) - 1, max( 0, (int) round( ( $net_change / $max_value ) * ( count( $bar_chars ) - 1 ) ) ) );
+
+		return $bar_chars[ $index ];
+	}
+
+	return $bar_chars[0]; // Return the lowest bar if max_value is not positive
 }

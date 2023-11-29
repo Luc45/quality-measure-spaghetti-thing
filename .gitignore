@@ -13,3 +13,6 @@ quality-vs-ratings.csv
 repos-original/
 
 quality-vs-ratings-out.csv
+
+hercules
+!hercules/python/labours/modes/old_vs_new.py
