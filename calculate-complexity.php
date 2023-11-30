@@ -27,15 +27,27 @@ register_shutdown_function( static function () {
 			$row['RepoDir'],
 			$row['WPORG URL'],
 			$row['Maintainer'],
+			$row['Repo'],
 			$row['WOOCOM URL'],
 			$row['Dependency Injection'],
 			$row['WOOCOM Installations'],
+			$row['(php) New Lines per Month (Capped at 100)'],
+			$row['(php) Changed Lines per Month (Capped at 100)'],
+			$row['(php) New Lines per Month (99th percentile)'],
+			$row['(php) New Lines per Month (Capped at 2500)'],
+			$row['Public Functions'],
+			$row['Protected/Private Functions'],
+			$row['Static Functions'],
+			$row['Slug'],
 		);
 
-		// Move to the end.
-		$repo = $row['Repo'];
-		unset( $row['Repo'] );
-		$row['Repo'] = $repo;
+		// Make all graph columns same size for consistency.
+		foreach ( $row as $col_name => $col_value ) {
+			if ( str_contains( $col_value, 'SPARKLINE' ) ) {
+				unset( $row[ $col_name ] );
+				$row[ str_pad( $col_name, 100, ' ', STR_PAD_RIGHT ) ] = $col_value;
+			}
+		}
 	}
 
 	$data = [];
@@ -82,8 +94,8 @@ evaluate_qit();
 correlate_tests_and_code_locs();
 add_aggregated_rating();
 evaluate_bus_factor();
+evaluate_change_concentration();
 evaluate_php_activity_hercules();
-//evaluate_php_activity();
 
 function load_csv() {
 	$csvFile = __DIR__ . '/quality-vs-ratings.csv';
@@ -379,20 +391,20 @@ function get_e2e_framework_info( string $path, array &$row ) {
 		case 'Codeception':
 			$t = $count_Codeception_tests( $it );
 
-			$row['wp-browser E2E Tests']     = $t['cests'] + $t['scenarios'];
-			$row['wp-browser E2E Tests Loc'] = $t['cests_loc'] + $t['scenarios_loc'];
+			$row['wp-browser E2E Tests'] = $t['cests'] + $t['scenarios'];
+			$row['wp-browser E2E LOC']   = $t['cests_loc'] + $t['scenarios_loc'];
 			break;
 		case 'Playwright':
 			$t = $count_Playwright_tests( $it );
 
-			$row['Playwright Tests']     = $t['tests'];
-			$row['Playwright Tests Loc'] = $t['tests_loc'];
+			$row['Playwright Tests'] = $t['tests'];
+			$row['Playwright LOC']   = $t['tests_loc'];
 			break;
 		case 'Puppeteer':
 			$t = $count_Playwright_tests( $it );
 
-			$row['Puppeteer E2E Tests']     = $t['tests'];
-			$row['Puppeteer E2E Tests LOC'] = $t['tests_loc'];
+			$row['Puppeteer E2E Tests'] = $t['tests'];
+			$row['Puppeteer E2E LOC']   = $t['tests_loc'];
 			break;
 	}
 }
@@ -448,21 +460,21 @@ function get_unit_framework_info( string $path, array &$row ) {
 	if ( $framework === 'Codeception' ) {
 		$t = $count_Codeception_tests( $it );
 
-		$row['wp-browser Unit Tests']     = $t['tests'];
-		$row['wp-browser Unit Tests LOC'] = $t['tests_loc'];
+		$row['wp-browser Unit Tests'] = $t['tests'];
+		$row['wp-browser Unit LOC']   = $t['tests_loc'];
 	} else {
 		$t = $count_PHPUnit_tests( $it );
 
-		$row['PHPUnit Tests']     = $t['tests'];
-		$row['PHPUnit Tests LOC'] = $t['tests_loc'];
+		$row['PHPUnit Tests'] = $t['tests'];
+		$row['PHPUnit LOC']   = $t['tests_loc'];
 	}
 }
 
 function evaluate_support() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		if ( empty( $row['WPORG URL'] ) ) {
-			$row['WPORG Support Threads']          = '';
-			$row['WPORG Support Threads Resolved'] = '';
+			$row['WPORG Supp'] = '';
+			$row['Resolved']   = '';
 			continue;
 		}
 
@@ -496,17 +508,17 @@ function evaluate_support() {
 
 		$plugin_info = json_decode( $response, true );
 
-		$row['WPORG Support Threads'] = $plugin_info['support_threads'] ?? '';
-		$resolved_threads             = $plugin_info['support_threads_resolved'] ?? 0;
-		$total_threads                = $plugin_info['support_threads'] ?? 0;
+		$row['WPORG Supp'] = $plugin_info['support_threads'] ?? '';
+		$resolved_threads  = $plugin_info['support_threads_resolved'] ?? 0;
+		$total_threads     = $plugin_info['support_threads'] ?? 0;
 
 		// Calculate the percentage of resolved threads
 		if ( $total_threads > 0 ) {
 			$resolved_percentage = ( $resolved_threads / $total_threads ) * 100;
 			// Format the resolved percentage with two decimal places
-			$row['WPORG Support Threads Resolved'] = round( $resolved_percentage, 2 ) . '%';
+			$row['Resolved'] = round( $resolved_percentage, 2 ) . '%';
 		} else {
-			$row['WPORG Support Threads Resolved'] = '';
+			$row['Resolved'] = '';
 		}
 	}
 }
@@ -518,9 +530,8 @@ function evaluate_php_loc() {
 		$it = new RecursiveDirectoryIterator( $plugin_dir, FilesystemIterator::SKIP_DOTS );
 		$it = new RecursiveIteratorIterator( $it );
 
-		$count_php_metrics = static function ( RecursiveIteratorIterator $it ) use ( $plugin_dir ): array {
+		$count_php_metrics = static function ( RecursiveIteratorIterator $it, &$phpmd_cache, bool $phpmd_cache_hit ) use ( $plugin_dir ): array {
 			$metrics = [
-				'loc'                         => 0,
 				'public_functions'            => 0,
 				'protected_private_functions' => 0,
 				'static_functions'            => 0,
@@ -530,6 +541,7 @@ function evaluate_php_loc() {
 				'class_injections'            => 0,
 				'num_php_files'               => 0,
 				'num_classes'                 => 0,
+				'longest_method'              => 0,
 			];
 
 			$command = "find $plugin_dir -path '*/tests/*' -prune -o -name '*.php' -exec wc -l {} +";
@@ -619,6 +631,41 @@ function evaluate_php_loc() {
 							}
 						}
 					}
+
+					if ( ! $phpmd_cache_hit ) {
+						$filename      = $file->getPathname();
+						$phpmd_command = __DIR__ . "/phpmd.phar $filename json --reportfile phpmd_output.json ruleset.xml";
+						exec( $phpmd_command );
+
+						if ( file_exists( 'phpmd_output.json' ) ) {
+							$phpmd_output = json_decode( file_get_contents( 'phpmd_output.json' ), true );
+
+							foreach ( $phpmd_output['files'] as $file ) {
+								foreach ( $file['violations'] as $violation ) {
+									if ( $violation['rule'] == 'CyclomaticComplexity' ) {
+										// Extract complexity value from the description
+										if ( preg_match( '/Cyclomatic Complexity of (\d+)/', $violation['description'], $matches ) ) {
+											$complexity = (int) $matches[1];
+
+											// Update total cyclomatic complexity
+											$phpmd_cache['total_cyclomatic_complexity'] += $complexity;
+
+											// Update biggest cyclomatic complexity
+											if ( $complexity > $phpmd_cache['biggest_cyclomatic_complexity'] ) {
+												$phpmd_cache['biggest_cyclomatic_complexity'] = $complexity;
+											}
+
+											// Increment method count
+											$phpmd_cache['method_count_cyclomatic_complexity'] ++;
+										}
+									}
+									// Other rules can be processed similarly
+								}
+							}
+
+							unlink( 'phpmd_output.json' );
+						}
+					}
 				}
 			}
 
@@ -638,7 +685,28 @@ function evaluate_php_loc() {
 			return $metrics; // This should be outside the foreach loop over $it
 		};
 
-		$metrics = $count_php_metrics( $it );
+		$phpmd_cache_file = __DIR__ . "/cache/phpmd_cache_{$row['Slug']}.json";
+
+		if ( file_exists( $phpmd_cache_file ) ) {
+			$phpmd_cache_hit = true;
+			$phpmd_cache     = json_decode( file_get_contents( $phpmd_cache_file ), true );
+		} else {
+			$phpmd_cache_hit = false;
+			$phpmd_cache     = [
+				'average_cyclomatic_complexity'      => 0,
+				'total_cyclomatic_complexity'        => 0,
+				'biggest_cyclomatic_complexity'      => 0,
+				'method_count_cyclomatic_complexity' => 0,
+			];
+		}
+
+		$metrics = $count_php_metrics( $it, $phpmd_cache, $phpmd_cache_hit );
+
+		if ( ! $phpmd_cache_hit ) {
+			file_put_contents( $phpmd_cache_file, json_encode( $phpmd_cache ) );
+		}
+
+		$metrics = array_merge( $metrics, $phpmd_cache );
 
 		$autoload_overrides = [
 			'woocommerce-square' => 'Composer',
@@ -648,18 +716,28 @@ function evaluate_php_loc() {
 			$metrics['has_autoloader'] = $autoload_overrides[ $row['Slug'] ];
 		}
 
+		// Calculate average cyclomatic complexity
+		$metrics['average_cyclomatic_complexity'] = $metrics['method_count_cyclomatic_complexity'] > 0
+			? $metrics['total_cyclomatic_complexity'] / $metrics['method_count_cyclomatic_complexity']
+			: 0;
+
 		// Assign the metrics to the respective row fields
-		$row['PHP LOC']                         = $metrics['loc'];
-		$row['Public Functions']                = $metrics['public_functions'];
-		$row['Protected/Private Functions']     = $metrics['protected_private_functions'];
-		$row['Static Functions']                = $metrics['static_functions'];
-		$row['Static vs Non-Static Percentage'] = intval( $metrics['static_percentage'] ) . '%';
-		$row['Encapsulation Percentage']        = intval( $metrics['encapsulation_percentage'] ) . '%';
-		$row['self::/static:: Usage']           = $metrics['self_static_usage'];
-		$row['Autoloader']                      = $metrics['has_autoloader'];
-		$row['Require/Include']                 = $metrics['requires'];
-		$row['Class Injections']                = $metrics['class_injections'];
-		$row['Ratio Methods and Classes']       = $metrics['ratio_methods_and_classes'];
+		$row['PHP LOC']                     = $metrics['loc'];
+		$row['Public Functions']            = $metrics['public_functions'];
+		$row['Protected/Private Functions'] = $metrics['protected_private_functions'];
+		$row['Static Functions']            = $metrics['static_functions'];
+		$row['Static %']                    = intval( $metrics['static_percentage'] ) . '%';
+		$row['Encapsulated']                = intval( $metrics['encapsulation_percentage'] ) . '%';
+		$row['self::/static::']             = $metrics['self_static_usage'];
+		$row['Autoloader']                  = $metrics['has_autoloader'];
+		$row['Require/Include']             = $metrics['requires'];
+		$row['Class Injections']            = $metrics['class_injections'];
+		$row['Avg Methods per Classes']     = $metrics['ratio_methods_and_classes'];
+
+		// Assign PHPMD metrics to the respective row fields
+		$row['Total Cyclomatic Complexity']   = $metrics['total_cyclomatic_complexity'];
+		$row['Average Cyclomatic Complexity'] = number_format( $metrics['average_cyclomatic_complexity'], 2 );
+		$row['Biggest Cyclomatic Complexity'] = $metrics['biggest_cyclomatic_complexity'];
 	}
 	unset( $row ); // Unset the reference to prevent potential issues later
 }
@@ -754,16 +832,19 @@ function correlate_tests_and_code_locs() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		// Use null coalescing operator to set default to 0 if not set
 		$code_loc       = (int) $row['PHP LOC'] ?? 0;
-		$unit_test_locs = (int) $row['PHPUnit Tests LOC'] + (int) $row['wp-browser Unit Tests LOC'];
-		$e2e_test_locs  = (int) $row['Playwright Tests Loc'] + (int) $row['Puppeteer E2E Tests LOC'] + (int) $row['wp-browser E2E Tests Loc'];
+		$unit_test_locs = (int) $row['PHPUnit LOC'] + (int) $row['wp-browser Unit LOC'];
+		$e2e_test_locs  = (int) $row['Playwright LOC'] + (int) $row['Puppeteer E2E LOC'] + (int) $row['wp-browser E2E LOC'];
+		$tests_loc      = $unit_test_locs + $e2e_test_locs;
 
 		// Calculate the proportions as percentages, using shorthand ternary operator to avoid division by zero
-		$unit_proportion_percentage = $code_loc > 0 ? ( $unit_test_locs / $code_loc ) * 100 : 0;
-		$e2e_proportion_percentage  = $code_loc > 0 ? ( $e2e_test_locs / $code_loc ) * 100 : 0;
+		$unit_proportion_percentage  = $code_loc > 0 ? ( $unit_test_locs / $code_loc ) * 100 : 0;
+		$e2e_proportion_percentage   = $code_loc > 0 ? ( $e2e_test_locs / $code_loc ) * 100 : 0;
+		$tests_proportion_percentage = $code_loc > 0 ? ( $tests_loc / $code_loc ) * 100 : 0;
 
 		// Optionally, add the proportions as percentages to the row itself if you want to keep track within the data set
 		$row['Unit Tests to Code LOC'] = (int) $unit_proportion_percentage . '%';
 		$row['E2E Tests to Code LOC']  = (int) $e2e_proportion_percentage . '%';
+		$row['Tests to Code LOC']      = (int) $tests_proportion_percentage . '%';
 	}
 }
 
@@ -843,6 +924,8 @@ function evaluate_bus_factor() {
 			// Define the hercules command
 			$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --burndown --burndown-people --first-parent --devs /repo | docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -i -v $cache_dir:/cache --user $(id -u):$(id -g) srcd/hercules labours -m ownership -o /cache/$cache_filename";
 
+			echo $herculesCommand . "\n";
+
 			// Execute the hercules command and redirect output to a file
 			exec( $herculesCommand, $output, $return_var );
 
@@ -853,12 +936,15 @@ function evaluate_bus_factor() {
 		}
 
 		$ownershipData    = json_decode( file_get_contents( $cache_filepath ), true );
-		$row['BusFactor'] = $calculateBusFactor( $ownershipData ) . '%';
+		$row['BusFactor'] = $calculateBusFactor( $ownershipData );
 	}
 }
 
 function evaluate_php_activity_hercules() {
-	$languages = [ 'php', 'javascript' ];
+	$languages = [
+		'php',
+		//'javascript'
+	];
 
 	foreach ( $languages as $lang ) {
 		$longest_graphs = [];
@@ -885,6 +971,8 @@ function evaluate_php_activity_hercules() {
 				// Define the hercules command
 				$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --first-parent --devs --languages $lang /repo > $yml_cache_filepath";
 
+				echo $herculesCommand;
+
 				// Execute the hercules command and redirect output to a file
 				exec( $herculesCommand, $output, $return_var );
 
@@ -895,7 +983,6 @@ function evaluate_php_activity_hercules() {
 			}
 
 			$generate_text = true;
-
 
 			$img_cache_filename = sprintf( '%s%s-hpa.%s', $lang === 'javascript' ? 'js' : 'php', substr( $row['Slug'], 0, 55 ), $generate_text ? 'txt' : 'svg' );
 			$img_cache_dir      = __DIR__ . '/cache/imgs/';
@@ -912,7 +999,7 @@ function evaluate_php_activity_hercules() {
 				}
 
 				// Execute the Python command
-				passthru( $pythonCommand, $return_var );
+				exec( $pythonCommand, $output, $return_var );
 
 				if ( $return_var !== 0 ) {
 					echo "Python command failed with error code: {$return_var}\n";
@@ -922,7 +1009,7 @@ function evaluate_php_activity_hercules() {
 
 			if ( $generate_text ) {
 				foreach ( file( $img_cache_filepath ) as $line ) {
-					if ( ! str_contains( $line, '||||' ) && ! str_contains( $line, 'Google' ) ) {
+					if ( ! str_contains( $line, '||||' ) && ! str_contains( $line, 'SPARKLINE' ) ) {
 						continue;
 					}
 					[ $columnName, $data ] = explode( '||||', $line, 2 );
@@ -956,12 +1043,21 @@ function evaluate_php_activity_hercules() {
 							// Pad the graph with zeros from the left
 							$padding     = array_fill( 0, $maxLength - $currentLength, '0' );
 							$paddedGraph = implode( ',', array_merge( $padding, $graphNumbers ) );
-
-							unset( $row[ $column ] );
-
-							// Replace the numerical data part of the SPARKLINE string
-							$row[ sprintf( '(%s) %s', $lang, $column ) ] = '=SPARKLINE({' . $paddedGraph . '}' . $matches[2];
+						} else {
+							$paddedGraph = $matches[1];
 						}
+
+						unset( $row[ $column ] );
+
+						// Replace the numerical data part of the SPARKLINE string
+						$new_col = sprintf( '(%s) %s', $lang, $column );
+						$new_val = '=SPARKLINE({' . $paddedGraph . '}' . $matches[2];
+
+						if ( str_contains( $new_col, '(php) Changed Lines per Month (99th percentile)' ) ) {
+							$new_val = str_replace( 'orange', 'green', $new_val );
+						}
+
+						$row[ $new_col ] = $new_val;
 					}
 				}
 			}
@@ -970,169 +1066,64 @@ function evaluate_php_activity_hercules() {
 	}
 }
 
-function evaluate_php_activity() {
+function evaluate_change_concentration() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
-		$repo_dir   = $row['RepoDir'];
-		$plugin_dir = $row['PluginDir'];
+		$repo_dir = $row['RepoDir'];
 
-		$cache_file = __DIR__ . '/cache/git-log-' . $row['Slug'] . '.json';
-
-		$months = 2;
+		$cache_file = __DIR__ . '/cache/git-change-concentration-' . $row['Slug'] . '.json';
 
 		// Check if the cache file exists
 		if ( file_exists( $cache_file ) ) {
 			// Load the cached data
-			$cached_data        = json_decode( file_get_contents( $cache_file ), true );
-			$linesOfCodeChanges = $cached_data['LinesOfCodeChanges'];
+			$cached_data   = json_decode( file_get_contents( $cache_file ), true );
+			$changed_files = $cached_data['changeConcentration'];
 		} else {
 			// Navigate to the repository directory.
 			chdir( $repo_dir );
 
-			// Get the date of the first commit.
-			$firstCommitDate = trim( exec( "git log --format='%cd' --date=short --reverse | head -1" ) );
+			// Get the list of PHP files and count changes
+			$php_files = [];
+			exec( "git ls-files | grep '.*\.php$'", $php_files );
+			$changes_per_file = [];
 
-			if ( ! preg_match( '/\d{4}-\d{2}-\d{2}/', $firstCommitDate ) ) {
-				echo "Invalid first commit date for plugin " . $row['PluginName'] . "\n";
-				continue;
+			foreach ( $php_files as $php_file ) {
+				$change_count                  = exec( "git log --follow --oneline '{$php_file}' | wc -l" );
+				$changes_per_file[ $php_file ] = (int) $change_count;
 			}
 
-			$linesOfCodeChanges = [];
-			$currentDate        = $firstCommitDate;
-			$endDate            = date( 'Y-m-d' ); // Today's date as the end date.
-			$cumulativeFiles    = [];
-
-			while ( strtotime( $currentDate ) < strtotime( $endDate ) ) {
-				$periodEndDate = date( 'Y-m-d', strtotime( "+{$months}months", strtotime( $currentDate ) ) );
-				$file_path     = sprintf( '%s/git-output-%s-%s.txt', sys_get_temp_dir(), $row['Slug'], uniqid() );
-
-				// Define the git log command
-				$gitLogCommand = "git log --since='{$currentDate}' --until='{$periodEndDate}' --numstat --pretty=format:'%H' -- '{$plugin_dir}'/**/*.php > $file_path";
-
-				// Execute the git log command and redirect output to a file
-				exec( $gitLogCommand, $output, $return_var );
-
-				if ( $return_var !== 0 ) {
-					echo "Git command failed with error code: {$return_var}\n";
-				} else {
-					// Read the output from the file
-					$output = file( $file_path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
-
-					// Optionally, delete the file if you no longer need it
-					unlink( $file_path );
-				}
-
-				$addedLines   = 0;
-				$removedLines = 0;
-				$filesParsed  = [];
-
-				foreach ( $output as $line ) {
-					$changes = preg_split( '/\s+/', $line );
-					if ( count( $changes ) === 3 && ! in_array( $changes[2], $GLOBALS['vendor_directories'] ) ) {
-						$addedLines        += (int) $changes[0];
-						$removedLines      += (int) $changes[1];
-						$filesParsed[]     = $changes[2];
-						$cumulativeFiles[] = $changes[2];
-					}
-				}
-
-				$linesOfCodeChanges[] = [
-					'startDate' => $currentDate,
-					'endDate'   => $periodEndDate,
-					'added'     => $addedLines,
-					'removed'   => $removedLines,
-					'files'     => array_unique( $filesParsed ),
-				];
-
-				$currentDate = $periodEndDate;
-			}
-
-			// Cache the raw data to a file
+			// Cache the results including total_php_commits
 			file_put_contents( $cache_file, json_encode( [
-				'LinesOfCodeChanges' => $linesOfCodeChanges,
+				'changeConcentration' => $changes_per_file,
 			] ) );
+
+			$changed_files = $changes_per_file;
 		}
 
-		$linesOfCodeChanges = aggregate_changes( $linesOfCodeChanges, $months );
+		// Sort list of changed files by number of changes.
+		arsort( $changed_files );
 
-		// First loop to find the max net change for the plugin
-		$max_net_change = 0;
-		foreach ( $linesOfCodeChanges as $change ) {
-			$net_change     = $change['added'] + $change['removed'];
-			$max_net_change = max( $max_net_change, $net_change );
+		// Calculate the change concentration
+		$total_changes = array_sum( $changed_files );
+		$hhi           = 0;
+
+		if ( $total_changes > 0 ) {
+			foreach ( $changed_files as $changes ) {
+				$proportion = $changes / $total_changes;
+				$hhi        += $proportion * $proportion;
+			}
 		}
 
-		// String to accumulate the visual history
-		$development_speed_relative = "";
-		$development_speed_absolute = "";
+		// Determine the number of top files to display (could be parameterized)
+		$top_files_to_display = 3; // Example: showing top 10 files
+		$most_files_changed   = array_slice( $changed_files, 0, $top_files_to_display, true );
 
-		$totalEstimated = 0;
-
-		// Second loop to generate the visual history of net changes
-		foreach ( $linesOfCodeChanges as &$change ) {
-			$net_change                 = $change['added'] + $change['removed'];
-			$totalEstimated             += $change['added'] - $change['removed'];
-			$development_speed_relative .= generate_single_bar( $net_change, $max_net_change );
+		// Convert the array to a string, with each element on a new line for 'Most files changed'
+		$most_changed_files = "";
+		foreach ( $most_files_changed as $file => $changes ) {
+			$most_changed_files .= substr( $changes . ' ' . $file, 0, 35 ) . "\n";
 		}
 
-		// Second loop to generate the visual history of net changes
-		foreach ( $linesOfCodeChanges as &$change ) {
-			$net_change                 = $change['added'] + $change['removed'];
-			$development_speed_absolute .= generate_single_bar( $net_change, $months * 1000 );
-		}
-
-		// Add the visual history to the plugin's data
-		$row['PHP Activity Estimated (Relative to itself)']                                                                                          = $development_speed_relative;
-		$row[ sprintf( 'PHP Activity Estimated (Relative to %d PHP LOC every %s)', $months * 1000, $months === 1 ? 'month' : $months . ' months' ) ] = $development_speed_absolute;
+		$row['Top Changed PHP Files'] = trim( $most_changed_files );
+		$row['Change Concentration']  = number_format( $hhi * 100, 2 ) . '%';
 	}
-}
-
-function aggregate_changes( $linesOfCodeChanged, $periodMonths ) {
-	$aggregatedChanges = [];
-	$aggregatedAdded   = 0;
-	$aggregatedRemoved = 0;
-	$count             = 0;
-
-	foreach ( $linesOfCodeChanged as $month => $change ) {
-		$aggregatedAdded   += $change['added'];
-		$aggregatedRemoved += $change['removed'];
-		$count ++;
-
-		// Every periodMonths, push the aggregated data and reset
-		if ( $count === $periodMonths ) {
-			$aggregatedChanges[] = [
-				'added'   => $aggregatedAdded,
-				'removed' => $aggregatedRemoved,
-			];
-			$aggregatedAdded     = 0;
-			$aggregatedRemoved   = 0;
-			$count               = 0;
-		}
-	}
-
-	// Add any remaining data if the last period is not complete
-	if ( $count > 0 ) {
-		$aggregatedChanges[] = [
-			'added'   => $aggregatedAdded,
-			'removed' => $aggregatedRemoved,
-		];
-	}
-
-	unset(
-		$linesOfCodeChanged['added'],
-		$linesOfCodeChanged['removed'],
-	);
-
-	return array_merge( $linesOfCodeChanged, $aggregatedChanges );
-}
-
-function generate_single_bar( $net_change, $max_value ) {
-	$bar_chars = [ "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" ]; // Gradient characters from low to high
-	if ( $max_value > 0 ) {
-		// Calculate the index within the bounds of the bar_chars array
-		$index = min( count( $bar_chars ) - 1, max( 0, (int) round( ( $net_change / $max_value ) * ( count( $bar_chars ) - 1 ) ) ) );
-
-		return $bar_chars[ $index ];
-	}
-
-	return $bar_chars[0]; // Return the lowest bar if max_value is not positive
 }
