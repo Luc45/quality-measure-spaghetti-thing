@@ -20,6 +20,8 @@ register_shutdown_function( static function () {
 		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $csvFile ) );
 	}
 
+	evaluate_scores();
+
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		unset(
@@ -39,6 +41,7 @@ register_shutdown_function( static function () {
 			$row['Protected/Private Functions'],
 			$row['Static Functions'],
 			$row['Slug'],
+			$row['PHP File List'],
 		);
 
 		// Make all graph columns same size for consistency.
@@ -89,6 +92,7 @@ maybe_download();
 evaluate_tests();
 evaluate_support();
 evaluate_php_loc();
+evaluate_phpmd();
 evaluate_phpcs();
 evaluate_qit();
 correlate_tests_and_code_locs();
@@ -96,6 +100,48 @@ add_aggregated_rating();
 evaluate_bus_factor();
 evaluate_change_concentration();
 evaluate_php_activity_hercules();
+
+function evaluate_scores() {
+	/**
+	 * Available array keys in $row for calculating complexity factor:
+	 * Extension    Aggregated Rating    WPORG Rating    WOOCOM Rating    WPORG Rating Count    WOOCOM Rating Count    WPORG Installations    Playwright Tests    Playwright LOC    wp-browser E2E Tests    wp-browser E2E LOC    Puppeteer E2E Tests    Puppeteer E2E LOC    wp-browser Unit Tests    wp-browser Unit LOC    PHPUnit Tests    PHPUnit LOC    Code Style Tests    QIT Integration    Autoloader    WPORG Supp    Resolved    PHP LOC    PHP Files    Static %    Encapsulated    self::/static::    Require/Include    Class Injections    Avg Methods per Classes    Total Method LOC    Average Method LOC    Longest Method LOC    Total Class LOC    Average Class LOC    Longest Class LOC    OOP LOCs    Total Cyclomatic Complexity    Average Cyclomatic Complexity    Biggest Cyclomatic Complexity    Unit Tests to PHP LOC    Unit Tests to OOP LOC    E2E Tests to PHP LOC    E2E Tests to OOP LOC    Tests to PHP LOC    Tests to OOP LOC    BusFactor    Top Changed PHP Files    Change Concentration    (php) Changed Lines per Month (99th percentile)                                                        (php) Changed Lines per Month (Capped at 2500)
+	 */
+	// Initialize variables for dynamic baselines and ceilings
+	$minTotal   = PHP_INT_MAX;
+	$maxTotal   = PHP_INT_MIN;
+	$minAverage = PHP_INT_MAX;
+	$maxAverage = PHP_INT_MIN;
+
+	// First iteration to find min and max values
+	foreach ( $GLOBALS['csvData'] as $row ) {
+		if ( isset( $row['Total Cyclomatic Complexity'], $row['Average Cyclomatic Complexity'] ) &&
+		     is_numeric( $row['Total Cyclomatic Complexity'] ) &&
+		     is_numeric( $row['Average Cyclomatic Complexity'] ) ) {
+
+			$minTotal   = min( $minTotal, $row['Total Cyclomatic Complexity'] );
+			$maxTotal   = max( $maxTotal, $row['Total Cyclomatic Complexity'] );
+			$minAverage = min( $minAverage, $row['Average Cyclomatic Complexity'] );
+			$maxAverage = max( $maxAverage, $row['Average Cyclomatic Complexity'] );
+		}
+	}
+
+	// Second iteration to calculate complexity scores
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		if ( isset( $row['Total Cyclomatic Complexity'], $row['Average Cyclomatic Complexity'] ) &&
+		     is_numeric( $row['Total Cyclomatic Complexity'] ) &&
+		     is_numeric( $row['Average Cyclomatic Complexity'] ) ) {
+
+			// Normalize the complexity values within the dynamically determined ranges
+			$normalizedTotal   = max( 0, min( 100, ( $row['Total Cyclomatic Complexity'] - $minTotal ) / ( $maxTotal - $minTotal ) * 100 ) );
+			$normalizedAverage = max( 0, min( 100, ( $row['Average Cyclomatic Complexity'] - $minAverage ) / ( $maxAverage - $minAverage ) * 100 ) );
+
+			// Calculate the weighted average of the normalized complexities
+			$row['Complexity Score'] = ( $normalizedTotal * 0.4 + $normalizedAverage * 0.6 );
+		} else {
+			$row['Complexity Score'] = 0;  // Default score if data is missing or not numeric
+		}
+	}
+}
 
 function load_csv() {
 	$csvFile = __DIR__ . '/quality-vs-ratings.csv';
@@ -154,8 +200,8 @@ function find_plugin_entrypoint( $dir ) {
 	$dir = rtrim( $dir, '/' ) . '/';
 
 	$hardcoded_map = [
-		'/repos/woocommerce/' => 'plugins/woocommerce',
-		#'/repos/mailpoet/' => 'mailpoet',
+		'/repos/woocommerce/'             => 'plugins/woocommerce',
+		'/repos/compatibility-dashboard/' => 'plugins/cd-manager',
 	];
 
 	// See if there's a hardcoded mapping for this repo.
@@ -228,7 +274,7 @@ function evaluate_tests() {
 			],
 			'woocommerce-blocks' => [
 				'unit' => 'php',
-			]
+			],
 		];
 
 		if ( file_exists( $plugin_dir . '/tests' ) ) {
@@ -530,7 +576,7 @@ function evaluate_php_loc() {
 		$it = new RecursiveDirectoryIterator( $plugin_dir, FilesystemIterator::SKIP_DOTS );
 		$it = new RecursiveIteratorIterator( $it );
 
-		$count_php_metrics = static function ( RecursiveIteratorIterator $it, &$phpmd_cache, bool $phpmd_cache_hit ) use ( $plugin_dir ): array {
+		$count_php_metrics = static function ( RecursiveIteratorIterator $it ) use ( $plugin_dir ): array {
 			$metrics = [
 				'public_functions'            => 0,
 				'protected_private_functions' => 0,
@@ -540,6 +586,7 @@ function evaluate_php_loc() {
 				'requires'                    => 0,
 				'class_injections'            => 0,
 				'num_php_files'               => 0,
+				'php_file_list'               => [],
 				'num_classes'                 => 0,
 				'longest_method'              => 0,
 			];
@@ -577,9 +624,14 @@ function evaluate_php_loc() {
 			];
 			$patternNonClassTypes = implode( '|', $nonClassTypes );
 
+			/** @var SplFileInfo $file */
 			foreach ( $it as $file ) {
 				if ( $file->isFile() && $file->getExtension() === 'php' ) {
+					if ( str_contains( $file->getPathname(), '/tests/' ) ) {
+						continue;
+					}
 					$metrics['num_php_files'] ++;
+					$metrics['php_file_list'][] = $file->getPathname();
 					// Skip vendor code.
 					foreach ( $GLOBALS['vendor_directories'] as $vendor_dir ) {
 						if ( str_contains( $file->getPathname(), "/$vendor_dir/" ) ) {
@@ -631,41 +683,6 @@ function evaluate_php_loc() {
 							}
 						}
 					}
-
-					if ( ! $phpmd_cache_hit ) {
-						$filename      = $file->getPathname();
-						$phpmd_command = __DIR__ . "/phpmd.phar $filename json --reportfile phpmd_output.json ruleset.xml";
-						exec( $phpmd_command );
-
-						if ( file_exists( 'phpmd_output.json' ) ) {
-							$phpmd_output = json_decode( file_get_contents( 'phpmd_output.json' ), true );
-
-							foreach ( $phpmd_output['files'] as $file ) {
-								foreach ( $file['violations'] as $violation ) {
-									if ( $violation['rule'] == 'CyclomaticComplexity' ) {
-										// Extract complexity value from the description
-										if ( preg_match( '/Cyclomatic Complexity of (\d+)/', $violation['description'], $matches ) ) {
-											$complexity = (int) $matches[1];
-
-											// Update total cyclomatic complexity
-											$phpmd_cache['total_cyclomatic_complexity'] += $complexity;
-
-											// Update biggest cyclomatic complexity
-											if ( $complexity > $phpmd_cache['biggest_cyclomatic_complexity'] ) {
-												$phpmd_cache['biggest_cyclomatic_complexity'] = $complexity;
-											}
-
-											// Increment method count
-											$phpmd_cache['method_count_cyclomatic_complexity'] ++;
-										}
-									}
-									// Other rules can be processed similarly
-								}
-							}
-
-							unlink( 'phpmd_output.json' );
-						}
-					}
 				}
 			}
 
@@ -685,28 +702,7 @@ function evaluate_php_loc() {
 			return $metrics; // This should be outside the foreach loop over $it
 		};
 
-		$phpmd_cache_file = __DIR__ . "/cache/phpmd_cache_{$row['Slug']}.json";
-
-		if ( file_exists( $phpmd_cache_file ) ) {
-			$phpmd_cache_hit = true;
-			$phpmd_cache     = json_decode( file_get_contents( $phpmd_cache_file ), true );
-		} else {
-			$phpmd_cache_hit = false;
-			$phpmd_cache     = [
-				'average_cyclomatic_complexity'      => 0,
-				'total_cyclomatic_complexity'        => 0,
-				'biggest_cyclomatic_complexity'      => 0,
-				'method_count_cyclomatic_complexity' => 0,
-			];
-		}
-
-		$metrics = $count_php_metrics( $it, $phpmd_cache, $phpmd_cache_hit );
-
-		if ( ! $phpmd_cache_hit ) {
-			file_put_contents( $phpmd_cache_file, json_encode( $phpmd_cache ) );
-		}
-
-		$metrics = array_merge( $metrics, $phpmd_cache );
+		$metrics = $count_php_metrics( $it );
 
 		$autoload_overrides = [
 			'woocommerce-square' => 'Composer',
@@ -716,13 +712,10 @@ function evaluate_php_loc() {
 			$metrics['has_autoloader'] = $autoload_overrides[ $row['Slug'] ];
 		}
 
-		// Calculate average cyclomatic complexity
-		$metrics['average_cyclomatic_complexity'] = $metrics['method_count_cyclomatic_complexity'] > 0
-			? $metrics['total_cyclomatic_complexity'] / $metrics['method_count_cyclomatic_complexity']
-			: 0;
-
 		// Assign the metrics to the respective row fields
 		$row['PHP LOC']                     = $metrics['loc'];
+		$row['PHP Files']                   = $metrics['num_php_files'];
+		$row['PHP File List']               = $metrics['php_file_list'];
 		$row['Public Functions']            = $metrics['public_functions'];
 		$row['Protected/Private Functions'] = $metrics['protected_private_functions'];
 		$row['Static Functions']            = $metrics['static_functions'];
@@ -733,14 +726,171 @@ function evaluate_php_loc() {
 		$row['Require/Include']             = $metrics['requires'];
 		$row['Class Injections']            = $metrics['class_injections'];
 		$row['Avg Methods per Classes']     = $metrics['ratio_methods_and_classes'];
-
-		// Assign PHPMD metrics to the respective row fields
-		$row['Total Cyclomatic Complexity']   = $metrics['total_cyclomatic_complexity'];
-		$row['Average Cyclomatic Complexity'] = number_format( $metrics['average_cyclomatic_complexity'], 2 );
-		$row['Biggest Cyclomatic Complexity'] = $metrics['biggest_cyclomatic_complexity'];
 	}
 	unset( $row ); // Unset the reference to prevent potential issues later
 }
+
+function evaluate_phpmd() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$plugin_dir = $row['PluginDir'];
+
+		$phpmd_cache_file = __DIR__ . "/cache/phpmd_{$row['Slug']}.json";
+
+		if ( file_exists( $phpmd_cache_file ) ) {
+			$phpmd_cache_hit = true;
+			$phpmd_cache     = json_decode( file_get_contents( $phpmd_cache_file ), true );
+		} else {
+			$phpmd_cache_hit = false;
+			$phpmd_cache     = [
+				'total_class_length'                 => 0,
+				'longest_class_length'               => 0,
+				'class_count_length'                 => 0,
+				'total_method_length'                => 0,
+				'longest_method_length'              => 0,
+				'method_count_length'                => 0,
+				'total_cyclomatic_complexity'        => 0,
+				'biggest_cyclomatic_complexity'      => 0,
+				'method_count_cyclomatic_complexity' => 0,
+			];
+		}
+
+		if ( ! $phpmd_cache_hit ) {
+			$phpmd_command = "php -d memory_limit=24G " . __DIR__ . "/phpmd.phar $plugin_dir/** --suffixes php json --reportfile phpmd_output.json ruleset.xml --exclude **/tests/**";
+			exec( $phpmd_command );
+			if ( file_exists( 'phpmd_output.json' ) ) {
+				try {
+					$phpmd_output = json_decode( file_get_contents( 'phpmd_output.json' ), true, 512, JSON_THROW_ON_ERROR );
+				} catch ( \JsonException $e ) {
+					unlink( 'phpmd_output.json' );
+					// Probably out of memory.
+					echo "Failed to parse phpmd_output.json for {$row['Slug']}\n";
+					die( 1 );
+				}
+
+				/*
+				if ( count( $phpmd_output['files'] ) !== $row['PHP Files'] ) {
+					// Extract the 'file' keys from $phpmd_output['files']
+					$phpmd_files = array_column( $phpmd_output['files'], 'file' );
+
+					// Compare $phpmd_files with $row['PHP File List'] to see which files are missing.
+					$missing_files = array_diff( $row['PHP File List'], $phpmd_files );
+
+					throw new \LogicException( sprintf( "PHPMD file count (%d) does not match PHP file count (%d) for %s", count( $phpmd_output['files'] ), $row['PHP Files'], $row['Slug'] ) );
+				}
+				*/
+
+				foreach ( $phpmd_output['files'] as $file ) {
+					foreach ( $file['violations'] as $violation ) {
+						if ( $violation['rule'] == 'ExcessiveMethodLength' ) {
+							if ( preg_match( '/has (\d+) lines of code/', $violation['description'], $matches ) ) {
+								$length = (int) $matches[1];
+
+								if ( $length > $violation['endLine'] - $violation['beginLine'] + 1 ) {
+									throw new \LogicException( "Method length exceeds the number of lines for {$row['Slug']}" );
+								}
+
+								// Update total method length
+								$phpmd_cache['total_method_length'] += $length;
+
+								// Update longest method length
+								if ( $length > $phpmd_cache['longest_method_length'] ) {
+									$phpmd_cache['longest_method_length'] = $length;
+								}
+
+								// Increment method count
+								$phpmd_cache['method_count_length'] ++;
+
+								if ( $phpmd_cache['total_method_length'] > $row['PHP LOC'] ) {
+									throw new \LogicException( "Total method length exceeds PHP LOC for {$row['Slug']}" );
+								}
+							}
+						}
+						if ( $violation['rule'] == 'ExcessiveClassLength' ) {
+							if ( preg_match( '/has (\d+) lines of code/', $violation['description'], $matches ) ) {
+								$length = (int) $matches[1];
+
+								if ( $length > $violation['endLine'] - $violation['beginLine'] + 1 ) {
+									throw new \LogicException( "Class length exceeds the number of lines for {$row['Slug']}" );
+								}
+
+								// Update total method length
+								$phpmd_cache['total_class_length'] += $length;
+
+								// Update longest method length
+								if ( $length > $phpmd_cache['longest_class_length'] ) {
+									$phpmd_cache['longest_class_length'] = $length;
+								}
+
+								// Increment method count
+								$phpmd_cache['class_count_length'] ++;
+
+								if ( $phpmd_cache['total_class_length'] > $row['PHP LOC'] ) {
+									throw new \LogicException( "Total class length exceeds PHP LOC for {$row['Slug']}" );
+								}
+							}
+						}
+						if ( $violation['rule'] == 'CyclomaticComplexity' ) {
+							// Extract complexity value from the description
+							if ( preg_match( '/Cyclomatic Complexity of (\d+)/', $violation['description'], $matches ) ) {
+								$complexity = (int) $matches[1];
+
+								// Update total cyclomatic complexity
+								$phpmd_cache['total_cyclomatic_complexity'] += $complexity;
+
+								// Update biggest cyclomatic complexity
+								if ( $complexity > $phpmd_cache['biggest_cyclomatic_complexity'] ) {
+									$phpmd_cache['biggest_cyclomatic_complexity'] = $complexity;
+								}
+
+								// Increment method count
+								$phpmd_cache['method_count_cyclomatic_complexity'] ++;
+							}
+						}
+					}
+				}
+				unlink( 'phpmd_output.json' );
+			}
+			file_put_contents( $phpmd_cache_file, json_encode( $phpmd_cache ) );
+		}
+
+		// Calculate average method length
+		$phpmd_cache['average_method_length'] = $phpmd_cache['method_count_length'] > 0
+			? $phpmd_cache['total_method_length'] / $phpmd_cache['method_count_length']
+			: 0;
+
+		// Assign PHPMD metrics to the respective row fields
+		$row['Total Method LOC']   = $phpmd_cache['total_method_length'];
+		$row['Average Method LOC'] = number_format( $phpmd_cache['average_method_length'], 2 );
+		$row['Longest Method LOC'] = $phpmd_cache['longest_method_length'];
+
+		// Calculate average class length
+		$phpmd_cache['average_class_length'] = $phpmd_cache['class_count_length'] > 0
+			? $phpmd_cache['total_class_length'] / $phpmd_cache['class_count_length']
+			: 0;
+
+		// Assign PHPMD metrics to the respective row fields
+		$row['Total Class LOC']   = $phpmd_cache['total_class_length'];
+		$row['Average Class LOC'] = number_format( $phpmd_cache['average_class_length'], 2 );
+		$row['Longest Class LOC'] = $phpmd_cache['longest_class_length'];
+
+		// Calculate OOP percentage from $phpmd_cache['total_class_length'] and $row['PHP LOC']
+		$row['OOP LOCs'] = $row['PHP LOC'] > 0
+			? number_format( $phpmd_cache['total_class_length'] / $row['PHP LOC'] * 100, 2 ) . '%'
+			: 0;
+
+		// Calculate average cyclomatic complexity
+		$phpmd_cache['average_cyclomatic_complexity'] = $phpmd_cache['method_count_cyclomatic_complexity'] > 0
+			? $phpmd_cache['total_cyclomatic_complexity'] / $phpmd_cache['method_count_cyclomatic_complexity']
+			: 0;
+
+		// Assign PHPMD metrics to the respective row fields
+		$row['Total Cyclomatic Complexity']   = $phpmd_cache['total_cyclomatic_complexity'];
+		$row['Average Cyclomatic Complexity'] = number_format( $phpmd_cache['average_cyclomatic_complexity'], 2 );
+		$row['Biggest Cyclomatic Complexity'] = $phpmd_cache['biggest_cyclomatic_complexity'];
+	}
+	unset( $row ); // Unset the reference to prevent potential issues later
+}
+
 
 function evaluate_phpcs() {
 	/**
@@ -831,6 +981,7 @@ function evaluate_qit() {
 function correlate_tests_and_code_locs() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		// Use null coalescing operator to set default to 0 if not set
+		$oop_loc        = (int) $row['Total Class LOC'] ?? 0;
 		$code_loc       = (int) $row['PHP LOC'] ?? 0;
 		$unit_test_locs = (int) $row['PHPUnit LOC'] + (int) $row['wp-browser Unit LOC'];
 		$e2e_test_locs  = (int) $row['Playwright LOC'] + (int) $row['Puppeteer E2E LOC'] + (int) $row['wp-browser E2E LOC'];
@@ -841,10 +992,19 @@ function correlate_tests_and_code_locs() {
 		$e2e_proportion_percentage   = $code_loc > 0 ? ( $e2e_test_locs / $code_loc ) * 100 : 0;
 		$tests_proportion_percentage = $code_loc > 0 ? ( $tests_loc / $code_loc ) * 100 : 0;
 
+		$unit_proportion_percentage_oop  = $code_loc > 0 ? ( $unit_test_locs / $oop_loc ) * 100 : 0;
+		$e2e_proportion_percentage_oop   = $code_loc > 0 ? ( $e2e_test_locs / $oop_loc ) * 100 : 0;
+		$tests_proportion_percentage_oop = $code_loc > 0 ? ( $tests_loc / $oop_loc ) * 100 : 0;
+
 		// Optionally, add the proportions as percentages to the row itself if you want to keep track within the data set
-		$row['Unit Tests to Code LOC'] = (int) $unit_proportion_percentage . '%';
-		$row['E2E Tests to Code LOC']  = (int) $e2e_proportion_percentage . '%';
-		$row['Tests to Code LOC']      = (int) $tests_proportion_percentage . '%';
+		$row['Unit Tests to PHP LOC'] = (int) $unit_proportion_percentage . '%';
+		$row['Unit Tests to OOP LOC'] = (int) $unit_proportion_percentage_oop . '%';
+
+		$row['E2E Tests to PHP LOC'] = (int) $e2e_proportion_percentage . '%';
+		$row['E2E Tests to OOP LOC'] = (int) $e2e_proportion_percentage_oop . '%';
+
+		$row['Tests to PHP LOC'] = (int) $tests_proportion_percentage . '%';
+		$row['Tests to OOP LOC'] = (int) $tests_proportion_percentage_oop . '%';
 	}
 }
 
@@ -901,7 +1061,6 @@ function evaluate_bus_factor() {
 	};
 
 	foreach ( $GLOBALS['csvData'] as &$row ) {
-
 		$repo_dir = $row['RepoDir'];
 
 		$cache_dir      = __DIR__ . '/cache/';
