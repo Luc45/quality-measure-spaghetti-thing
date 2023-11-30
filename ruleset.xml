@@ -17,6 +17,24 @@
             <property name="reportLevel" value="0" />
         </properties>
     </rule>
+
+    <!-- Excessive Class Length -->
+    <rule ref="rulesets/codesize.xml/ExcessiveClassLength">
+        <priority>1</priority>
+        <properties>
+            <property name="minimum" value="1"/>
+            <property name="ignore-whitespace" value="false"/>
+        </properties>
+    </rule>
+
+    <!-- Excessive Method Length -->
+    <rule ref="rulesets/codesize.xml/ExcessiveMethodLength">
+        <priority>1</priority>
+        <properties>
+            <property name="minimum" value="1"/>
+            <property name="ignore-whitespace" value="false"/>
+        </properties>
+    </rule>
 </ruleset>
 
 

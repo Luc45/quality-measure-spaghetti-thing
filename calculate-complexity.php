@@ -42,6 +42,8 @@ register_shutdown_function( static function () {
 			$row['Static Functions'],
 			$row['Slug'],
 			$row['PHP File List'],
+			$row['RelativePluginDir'],
+			$row['HerculesWhitelist'],
 		);
 
 		// Make all graph columns same size for consistency.
@@ -89,6 +91,7 @@ register_shutdown_function( static function () {
 
 load_csv();
 maybe_download();
+init();
 evaluate_tests();
 evaluate_support();
 evaluate_php_loc();
@@ -248,8 +251,48 @@ function find_plugin_entrypoint( $dir ) {
 	throw new Exception( "No entry point found in $dir" );
 }
 
+function init() {
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$repo_dir   = $row['RepoDir'];
+		$plugin_dir = $row['PluginDir'];
+
+		if ( $repo_dir !== $plugin_dir ) {
+			$whitelist                = trim( str_replace( $repo_dir, '', $plugin_dir ), '/' );
+			$row['RelativePluginDir'] = $whitelist;
+			$row['HerculesWhitelist'] = "--whitelist \"$whitelist/*\"";
+		} else {
+			$row['RelativePluginDir'] = '';
+			$row['HerculesWhitelist'] = '';
+		}
+	}
+}
+
+function report_progress( $action ) {
+	static $current_action = null;
+	static $progress = 0;
+	$total = count( $GLOBALS['csvData'] );
+
+	if ( $action !== $current_action ) {
+		$progress       = 0;
+		$current_action = $action;
+	} else {
+		$progress ++;
+	}
+
+	$processing_slug = array_values( $GLOBALS['csvData'] )[ $progress ]['Slug'];
+
+	// Prepare the progress message
+	$progress_message = "$action: $progress/$total [Processing $processing_slug]";
+
+	// Print the message with enough padding to clear the line
+	echo "\r" . $progress_message . str_repeat( ' ', max( 0, 80 - strlen( $progress_message ) ) );
+	flush(); // Force the output to be written out
+}
+
 function evaluate_tests() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating tests' );
+
 		$plugin_dir         = $row['PluginDir'];
 		$vendor_directories = $GLOBALS['vendor_directories'];
 		$test_directories   = [
@@ -518,6 +561,8 @@ function get_unit_framework_info( string $path, array &$row ) {
 
 function evaluate_support() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating support' );
+
 		if ( empty( $row['WPORG URL'] ) ) {
 			$row['WPORG Supp'] = '';
 			$row['Resolved']   = '';
@@ -571,6 +616,8 @@ function evaluate_support() {
 
 function evaluate_php_loc() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating PHP LOC' );
+
 		$plugin_dir = $row['PluginDir'];
 
 		$it = new RecursiveDirectoryIterator( $plugin_dir, FilesystemIterator::SKIP_DOTS );
@@ -732,6 +779,8 @@ function evaluate_php_loc() {
 
 function evaluate_phpmd() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating PHPMD' );
+
 		$plugin_dir = $row['PluginDir'];
 
 		$phpmd_cache_file = __DIR__ . "/cache/phpmd_{$row['Slug']}.json";
@@ -891,7 +940,6 @@ function evaluate_phpmd() {
 	unset( $row ); // Unset the reference to prevent potential issues later
 }
 
-
 function evaluate_phpcs() {
 	/**
 	 * Do a foreach on the csvData
@@ -900,6 +948,8 @@ function evaluate_phpcs() {
 	 * If it has it, set $row['Code Style Tests'] to 'Yes', or 'No'
 	 */
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating PHPCS' );
+
 		$plugin_dir = $row['PluginDir'];
 		$repo_dir   = $row['RepoDir'];
 
@@ -1061,7 +1111,13 @@ function evaluate_bus_factor() {
 	};
 
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating Bus Factor' );
+
 		$repo_dir = $row['RepoDir'];
+
+		if ( empty( $row['HerculesWhitelist'] ) ) {
+			continue;
+		}
 
 		$cache_dir      = __DIR__ . '/cache/';
 		$cache_filename = 'hercules-ownership-' . $row['Slug'] . '.json';
@@ -1081,7 +1137,7 @@ function evaluate_bus_factor() {
 			chdir( $repo_dir );
 
 			// Define the hercules command
-			$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --burndown --burndown-people --first-parent --devs /repo | docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -i -v $cache_dir:/cache --user $(id -u):$(id -g) srcd/hercules labours -m ownership -o /cache/$cache_filename";
+			$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --burndown --burndown-people --first-parent --devs /repo {$row['HerculesWhitelist']} | docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -i -v $cache_dir:/cache --user $(id -u):$(id -g) srcd/hercules labours -m ownership -o /cache/$cache_filename";
 
 			echo $herculesCommand . "\n";
 
@@ -1108,7 +1164,13 @@ function evaluate_php_activity_hercules() {
 	foreach ( $languages as $lang ) {
 		$longest_graphs = [];
 		foreach ( $GLOBALS['csvData'] as &$row ) {
+			report_progress( "Evaluating $lang Activity" );
+
 			$repo_dir = $row['RepoDir'];
+
+			if ( empty( $row['HerculesWhitelist'] ) ) {
+				continue;
+			}
 
 			$yml_cache_dir      = __DIR__ . '/cache/hercules/';
 			$yml_cache_filename = "hercules-devs-$lang-{$row['Slug']}.yml";
@@ -1128,7 +1190,7 @@ function evaluate_php_activity_hercules() {
 				chdir( $repo_dir );
 
 				// Define the hercules command
-				$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --first-parent --devs --languages $lang /repo > $yml_cache_filepath";
+				$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --first-parent --devs --languages $lang /repo {$row['HerculesWhitelist']} > $yml_cache_filepath";
 
 				echo $herculesCommand;
 
@@ -1141,21 +1203,15 @@ function evaluate_php_activity_hercules() {
 				}
 			}
 
-			$generate_text = true;
+			$activity_cache_filename = sprintf( '%s%s-hpa.txt', $lang === 'javascript' ? 'js' : 'php', substr( $row['Slug'], 0, 55 ) );
+			$activity_cache_dir      = __DIR__ . '/cache/activity/';
+			$activity_cache_filepath = $activity_cache_dir . $activity_cache_filename;
 
-			$img_cache_filename = sprintf( '%s%s-hpa.%s', $lang === 'javascript' ? 'js' : 'php', substr( $row['Slug'], 0, 55 ), $generate_text ? 'txt' : 'svg' );
-			$img_cache_dir      = __DIR__ . '/cache/imgs/';
-			$img_cache_filepath = $img_cache_dir . $img_cache_filename;
-
-			if ( ! file_exists( $img_cache_filepath ) ) {
+			if ( ! file_exists( $activity_cache_filepath ) ) {
 				$pythonEnvPath    = __DIR__ . '/hercules/python/mynewenv/bin/python';
 				$pythonScriptPath = __DIR__ . '/hercules/python/labours';
 
-				if ( $generate_text ) {
-					$pythonCommand = "HERCULES_SPARKLINE_MODE=true HERCULES_SPARKLINE_GOOGLE_MODE=true $pythonEnvPath $pythonScriptPath -m old-vs-new -i $yml_cache_filepath > $img_cache_filepath";
-				} else {
-					$pythonCommand = "$pythonEnvPath $pythonScriptPath -m old-vs-new -i $yml_cache_filepath -o $img_cache_filepath";
-				}
+				$pythonCommand = "$pythonEnvPath $pythonScriptPath -m old-vs-new -i $yml_cache_filepath > $activity_cache_filepath";
 
 				// Execute the Python command
 				exec( $pythonCommand, $output, $return_var );
@@ -1166,27 +1222,23 @@ function evaluate_php_activity_hercules() {
 				}
 			}
 
-			if ( $generate_text ) {
-				foreach ( file( $img_cache_filepath ) as $line ) {
-					if ( ! str_contains( $line, '||||' ) && ! str_contains( $line, 'SPARKLINE' ) ) {
-						continue;
-					}
-					[ $columnName, $data ] = explode( '||||', $line, 2 );
-					$row[ $columnName ] = trim( $data );
-
-					if ( ! array_key_exists( $columnName, $longest_graphs ) ) {
-						$longest_graphs[ $columnName ] = 0;
-					}
-
-					preg_match( '/=SPARKLINE\(\{([^}]+)\}/', $data, $matches );
-					$length = count( explode( ',', $matches[1] ) );
-
-					if ( $length > $longest_graphs[ $columnName ] ) {
-						$longest_graphs[ $columnName ] = $length;
-					}
+			foreach ( file( $activity_cache_filepath ) as $line ) {
+				if ( ! str_contains( $line, '||||' ) && ! str_contains( $line, 'SPARKLINE' ) ) {
+					continue;
 				}
-			} else {
-				$row['PHP Activity'] = sprintf( '=IMAGE("https://stagingcompatibilitydashboard.wpcomstaging.com/wp-content/uploads/php-activity/%s", 2)', $img_cache_filename );
+				[ $columnName, $data ] = explode( '||||', $line, 2 );
+				$row[ $columnName ] = trim( $data );
+
+				if ( ! array_key_exists( $columnName, $longest_graphs ) ) {
+					$longest_graphs[ $columnName ] = 0;
+				}
+
+				preg_match( '/=SPARKLINE\(\{([^}]+)\}/', $data, $matches );
+				$length = count( explode( ',', $matches[1] ) );
+
+				if ( $length > $longest_graphs[ $columnName ] ) {
+					$longest_graphs[ $columnName ] = $length;
+				}
 			}
 		}
 
@@ -1227,6 +1279,7 @@ function evaluate_php_activity_hercules() {
 
 function evaluate_change_concentration() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
+		report_progress( 'Evaluating Change Concentration' );
 		$repo_dir = $row['RepoDir'];
 
 		$cache_file = __DIR__ . '/cache/git-change-concentration-' . $row['Slug'] . '.json';
@@ -1242,7 +1295,7 @@ function evaluate_change_concentration() {
 
 			// Get the list of PHP files and count changes
 			$php_files = [];
-			exec( "git ls-files | grep '.*\.php$'", $php_files );
+			exec( "git ls-files | grep '{$row['RelativePluginDir']}/.*\.php$'", $php_files );
 			$changes_per_file = [];
 
 			foreach ( $php_files as $php_file ) {
@@ -1279,7 +1332,7 @@ function evaluate_change_concentration() {
 		// Convert the array to a string, with each element on a new line for 'Most files changed'
 		$most_changed_files = "";
 		foreach ( $most_files_changed as $file => $changes ) {
-			$most_changed_files .= substr( $changes . ' ' . $file, 0, 35 ) . "\n";
+			$most_changed_files .= substr( $changes . ' ' . str_replace( $row['RelativePluginDir'], '', $file ), 0, 35 ) . "\n";
 		}
 
 		$row['Top Changed PHP Files'] = trim( $most_changed_files );
