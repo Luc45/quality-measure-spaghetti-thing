@@ -91,7 +91,7 @@ def show_old_vs_new(
     print(f"Changed Lines per Month (99th percentile)||||", google_sparkline_old_uncapped)
 
     # Array of cap values
-    cap_values = [2500, 100]
+    cap_values = [2500, 1000, 100]
 
     # Iterate over each cap value
     for cap_value in cap_values:

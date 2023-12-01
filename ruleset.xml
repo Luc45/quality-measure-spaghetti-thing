@@ -14,7 +14,7 @@
     <rule ref="rulesets/codesize.xml/CyclomaticComplexity">
         <priority>1</priority>
         <properties>
-            <property name="reportLevel" value="0" />
+            <property name="reportLevel" value="0"/>
         </properties>
     </rule>
 
@@ -34,6 +34,18 @@
             <property name="minimum" value="1"/>
             <property name="ignore-whitespace" value="false"/>
         </properties>
+    </rule>
+
+    <rule name="MethodVisibilityCount"
+          message="The class {0} has {1} public methods, {2} protected methods, and {3} private methods."
+          class="Spaghetti\PHPMD\Rule\Design\MethodVisibilityCount">
+        <priority>1</priority>
+    </rule>
+
+    <rule name="StaticMethodCount"
+          message="The class {0} has {1} static methods."
+          class="Spaghetti\PHPMD\Rule\Design\StaticMethodCount">
+        <priority>1</priority>
     </rule>
 </ruleset>
 

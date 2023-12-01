@@ -37,6 +37,8 @@ register_shutdown_function( static function () {
 			$row['(php) Changed Lines per Month (Capped at 100)'],
 			$row['(php) New Lines per Month (99th percentile)'],
 			$row['(php) New Lines per Month (Capped at 2500)'],
+			$row['(php) Changed Lines per Month (Capped at 2500)'],
+			$row['(php) New Lines per Month (Capped at 1000)'],
 			$row['Public Functions'],
 			$row['Protected/Private Functions'],
 			$row['Static Functions'],
@@ -307,16 +309,16 @@ function evaluate_tests() {
 				'unit-tests',
 				'phpunit',
 				'Unit',
+				'php',
 			]
 		];
 
 		$overrides = [
-			'woocommerce'        => [
-				'e2e'  => 'e2e-pw',
-				'unit' => 'php',
+			'woocommerce'            => [
+				'e2e' => 'e2e-pw',
 			],
-			'woocommerce-blocks' => [
-				'unit' => 'php',
+			'woocommerce-pre-orders' => [
+				'unit' => 'includes',
 			],
 		];
 
@@ -328,7 +330,8 @@ function evaluate_tests() {
 				'unknown' => [],
 			];
 
-			$has_override = [];
+			$found_unit_tests = false;
+			$has_override     = [];
 
 			foreach ( $it as $i ) {
 				$is_known = false;
@@ -340,6 +343,10 @@ function evaluate_tests() {
 							if ( $i->getBasename() === $override ) {
 								$fn = "get_{$type}_framework_info";
 								$fn( $i->getPathname(), $row );
+
+								if ( $type === 'unit' ) {
+									$found_unit_tests = true;
+								}
 
 								$debug['test_types']['known'][ $type ]['basename'] = $i->getBasename();
 								$debug['test_types']['known'][ $type ]['path']     = $i->getPathname();
@@ -360,6 +367,10 @@ function evaluate_tests() {
 							$fn = "get_{$type}_framework_info";
 							$fn( $i->getPathname(), $row );
 
+							if ( $type === 'unit' ) {
+								$found_unit_tests = true;
+							}
+
 							$debug['test_types']['known'][ $type ]['basename'] = $i->getBasename();
 							$debug['test_types']['known'][ $type ]['path']     = $i->getPathname();
 						}
@@ -367,6 +378,23 @@ function evaluate_tests() {
 
 					if ( ! $is_known ) {
 						$debug['test_types']['unknown'][] = $i->getBasename();
+					}
+				}
+			}
+
+			if ( ! $found_unit_tests ) {
+				/** @var SplFileInfo $i */
+				foreach ( $it as $i ) {
+					if ( $i->isFile() && $i->getExtension() === 'php' ) {
+						$contents = file_get_contents( $i->getPathname() );
+						if ( preg_match( '/test/i', $contents ) ) {
+							$unit_tests_dir = dirname( $i->getPathname() );
+							$fn             = "get_unit_framework_info";
+							$fn( $unit_tests_dir, $row );
+							$debug['test_types']['known']['unit']['basename'] = basename( $unit_tests_dir );
+							$debug['test_types']['known']['unit']['path']     = $unit_tests_dir;
+							break;
+						}
 					}
 				}
 			}
@@ -625,16 +653,12 @@ function evaluate_php_loc() {
 
 		$count_php_metrics = static function ( RecursiveIteratorIterator $it ) use ( $plugin_dir ): array {
 			$metrics = [
-				'public_functions'            => 0,
-				'protected_private_functions' => 0,
-				'static_functions'            => 0,
 				'self_static_usage'           => 0,
 				'has_autoloader'              => 'No',
 				'requires'                    => 0,
 				'class_injections'            => 0,
 				'num_php_files'               => 0,
 				'php_file_list'               => [],
-				'num_classes'                 => 0,
 				'longest_method'              => 0,
 			];
 
@@ -687,13 +711,9 @@ function evaluate_php_loc() {
 					}
 
 					// Count non-empty lines of code.
-					$contents                               = file_get_contents( $file->getPathname() );
-					$metrics['public_functions']            += preg_match_all( '/\bpublic function\b/', $contents );
-					$metrics['protected_private_functions'] += preg_match_all( '/\b(protected|private) function\b/', $contents );
-					$metrics['static_functions']            += preg_match_all( '/\b(public|protected|private) static function\b/', $contents );
-					$metrics['self_static_usage']           += substr_count( $contents, 'self::' );
-					$metrics['self_static_usage']           += substr_count( $contents, 'static::' );
-					$metrics['num_classes']                 += substr_count( $contents, 'class ' );
+					$contents                     = file_get_contents( $file->getPathname() );
+					$metrics['self_static_usage'] += substr_count( $contents, 'self::' );
+					$metrics['self_static_usage'] += substr_count( $contents, 'static::' );
 
 					// Count how many spl_autoload_register it has, and add it to "has_autoloader" like this: "1 spl_autoload_register"
 					if ( $metrics['has_autoloader'] !== 'Composer' ) {
@@ -737,15 +757,6 @@ function evaluate_php_loc() {
 				$metrics['has_autoloader'] = "$spl_autoload_register spl_autoload_register";
 			}
 
-			// Calculate the percentage of static vs non-static functions
-			$total_functions              = $metrics['public_functions'] + $metrics['protected_private_functions'];
-			$metrics['static_percentage'] = $total_functions > 0 ? ( $metrics['static_functions'] / $total_functions ) * 100 : 0;
-
-			// Calculate the encapsulation percentage (public vs non-public)
-			$metrics['encapsulation_percentage'] = $total_functions > 0 ? ( $metrics['protected_private_functions'] / $total_functions ) * 100 : 0;
-
-			$metrics['ratio_methods_and_classes'] = $metrics['num_classes'] > 0 ? number_format( $total_functions / $metrics['num_classes'], 2 ) : 0;
-
 			return $metrics; // This should be outside the foreach loop over $it
 		};
 
@@ -760,19 +771,13 @@ function evaluate_php_loc() {
 		}
 
 		// Assign the metrics to the respective row fields
-		$row['PHP LOC']                     = $metrics['loc'];
-		$row['PHP Files']                   = $metrics['num_php_files'];
-		$row['PHP File List']               = $metrics['php_file_list'];
-		$row['Public Functions']            = $metrics['public_functions'];
-		$row['Protected/Private Functions'] = $metrics['protected_private_functions'];
-		$row['Static Functions']            = $metrics['static_functions'];
-		$row['Static %']                    = intval( $metrics['static_percentage'] ) . '%';
-		$row['Encapsulated']                = intval( $metrics['encapsulation_percentage'] ) . '%';
-		$row['self::/static::']             = $metrics['self_static_usage'];
-		$row['Autoloader']                  = $metrics['has_autoloader'];
-		$row['Require/Include']             = $metrics['requires'];
-		$row['Class Injections']            = $metrics['class_injections'];
-		$row['Avg Methods per Classes']     = $metrics['ratio_methods_and_classes'];
+		$row['PHP LOC']          = $metrics['loc'];
+		$row['PHP Files']        = $metrics['num_php_files'];
+		$row['PHP File List']    = $metrics['php_file_list'];
+		$row['self::/static::']  = $metrics['self_static_usage'];
+		$row['Autoloader']       = $metrics['has_autoloader'];
+		$row['Require/Include']  = $metrics['requires'];
+		$row['Class Injections'] = $metrics['class_injections'];
 	}
 	unset( $row ); // Unset the reference to prevent potential issues later
 }
@@ -791,6 +796,7 @@ function evaluate_phpmd() {
 		} else {
 			$phpmd_cache_hit = false;
 			$phpmd_cache     = [
+				'total_classes'                      => 0,
 				'total_class_length'                 => 0,
 				'longest_class_length'               => 0,
 				'class_count_length'                 => 0,
@@ -800,11 +806,15 @@ function evaluate_phpmd() {
 				'total_cyclomatic_complexity'        => 0,
 				'biggest_cyclomatic_complexity'      => 0,
 				'method_count_cyclomatic_complexity' => 0,
+				'total_public_methods'               => 0,
+				'total_protected_methods'            => 0,
+				'total_private_methods'              => 0,
+				'total_static_methods'               => 0,
 			];
 		}
 
 		if ( ! $phpmd_cache_hit ) {
-			$phpmd_command = "php -d memory_limit=24G " . __DIR__ . "/phpmd.phar $plugin_dir/** --suffixes php json --reportfile phpmd_output.json ruleset.xml --exclude **/tests/**";
+			$phpmd_command = "php -d memory_limit=24G " . __DIR__ . "/vendor/bin/phpmd $plugin_dir/** --suffixes php json --reportfile phpmd_output.json ruleset.xml --exclude **/tests/**,**/AI/data/**";
 			exec( $phpmd_command );
 			if ( file_exists( 'phpmd_output.json' ) ) {
 				try {
@@ -815,18 +825,6 @@ function evaluate_phpmd() {
 					echo "Failed to parse phpmd_output.json for {$row['Slug']}\n";
 					die( 1 );
 				}
-
-				/*
-				if ( count( $phpmd_output['files'] ) !== $row['PHP Files'] ) {
-					// Extract the 'file' keys from $phpmd_output['files']
-					$phpmd_files = array_column( $phpmd_output['files'], 'file' );
-
-					// Compare $phpmd_files with $row['PHP File List'] to see which files are missing.
-					$missing_files = array_diff( $row['PHP File List'], $phpmd_files );
-
-					throw new \LogicException( sprintf( "PHPMD file count (%d) does not match PHP file count (%d) for %s", count( $phpmd_output['files'] ), $row['PHP Files'], $row['Slug'] ) );
-				}
-				*/
 
 				foreach ( $phpmd_output['files'] as $file ) {
 					foreach ( $file['violations'] as $violation ) {
@@ -895,6 +893,29 @@ function evaluate_phpmd() {
 								$phpmd_cache['method_count_cyclomatic_complexity'] ++;
 							}
 						}
+						if ( $violation['rule'] == 'MethodVisibilityCount' ) {
+							// Extract visibility counts from the description
+							if ( preg_match( '/has (\d+) public methods, (\d+) protected methods, and (\d+) private methods/', $violation['description'], $matches ) ) {
+								$publicMethods    = (int) $matches[1];
+								$protectedMethods = (int) $matches[2];
+								$privateMethods   = (int) $matches[3];
+
+								// Update total public, protected, and private methods
+								$phpmd_cache['total_public_methods']    += $publicMethods;
+								$phpmd_cache['total_protected_methods'] += $protectedMethods;
+								$phpmd_cache['total_private_methods']   += $privateMethods;
+								$phpmd_cache['total_classes'] ++;
+							}
+						}
+						if ( $violation['rule'] == 'StaticMethodCount' ) {
+							// Extract the static method count from the description
+							if ( preg_match( '/has (\d+) static methods/', $violation['description'], $matches ) ) {
+								$staticMethodsCount = (int) $matches[1];
+
+								// Update total static methods
+								$phpmd_cache['total_static_methods'] += $staticMethodsCount;
+							}
+						}
 					}
 				}
 				unlink( 'phpmd_output.json' );
@@ -902,7 +923,32 @@ function evaluate_phpmd() {
 			file_put_contents( $phpmd_cache_file, json_encode( $phpmd_cache ) );
 		}
 
-		// Calculate average method length
+		/*
+		 * Public/Protected/Private Methods
+		 */
+		$total_methods        = $phpmd_cache['total_public_methods'] + $phpmd_cache['total_protected_methods'] + $phpmd_cache['total_private_methods'];
+		$encapsulated_methods = $phpmd_cache['total_protected_methods'] + $phpmd_cache['total_private_methods'];
+
+		$row['Public Functions']            = $phpmd_cache['total_public_methods'];
+		$row['Protected/Private Functions'] = $encapsulated_methods;
+
+		// Calculate the encapsulation percentage (public vs non-public)
+		$row['Encapsulated'] = intval( $total_methods > 0 ? ( $encapsulated_methods / $total_methods ) * 100 : 0 ) . '%';
+
+		/*
+		 * Static Methods
+		 */
+		$static_percentage = $phpmd_cache['total_static_methods'] > 0 ? $phpmd_cache['total_static_methods'] / $total_methods * 100 : 0;
+
+		$average_methods_per_class = $phpmd_cache['total_classes'] > 0 ? $total_methods / $phpmd_cache['total_classes'] : 0;
+
+		$row['Static Functions']        = $phpmd_cache['total_static_methods'];
+		$row['Static %']                = intval( $static_percentage ) . '%';
+		$row['Avg Methods per Classes'] = number_format( $average_methods_per_class, 2 );
+
+		/*
+		 * Methods LOC.
+		 */
 		$phpmd_cache['average_method_length'] = $phpmd_cache['method_count_length'] > 0
 			? $phpmd_cache['total_method_length'] / $phpmd_cache['method_count_length']
 			: 0;
@@ -927,7 +973,9 @@ function evaluate_phpmd() {
 			? number_format( $phpmd_cache['total_class_length'] / $row['PHP LOC'] * 100, 2 ) . '%'
 			: 0;
 
-		// Calculate average cyclomatic complexity
+		/*
+		 * Cyclomatic Complexity.
+		 */
 		$phpmd_cache['average_cyclomatic_complexity'] = $phpmd_cache['method_count_cyclomatic_complexity'] > 0
 			? $phpmd_cache['total_cyclomatic_complexity'] / $phpmd_cache['method_count_cyclomatic_complexity']
 			: 0;
@@ -1115,10 +1163,6 @@ function evaluate_bus_factor() {
 
 		$repo_dir = $row['RepoDir'];
 
-		if ( empty( $row['HerculesWhitelist'] ) ) {
-			continue;
-		}
-
 		$cache_dir      = __DIR__ . '/cache/';
 		$cache_filename = 'hercules-ownership-' . $row['Slug'] . '.json';
 		$cache_filepath = $cache_dir . $cache_filename;
@@ -1167,10 +1211,6 @@ function evaluate_php_activity_hercules() {
 			report_progress( "Evaluating $lang Activity" );
 
 			$repo_dir = $row['RepoDir'];
-
-			if ( empty( $row['HerculesWhitelist'] ) ) {
-				continue;
-			}
 
 			$yml_cache_dir      = __DIR__ . '/cache/hercules/';
 			$yml_cache_filename = "hercules-devs-$lang-{$row['Slug']}.yml";

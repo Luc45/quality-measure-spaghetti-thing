@@ -1,0 +1,11 @@
+{
+  "autoload": {
+    "psr-4": {
+      "Spaghetti\\PHPMD\\": "phpmd/PHPMD/"
+    }
+  },
+  "require-dev": {
+    "phpmd/phpmd" : "@stable",
+    "symfony/config": "^5"
+  }
+}
