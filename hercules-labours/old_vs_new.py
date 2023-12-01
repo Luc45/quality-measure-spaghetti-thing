@@ -84,11 +84,18 @@ def show_old_vs_new(
     debug_log(f"Processed old_lines data: {old_lines}")
 
     # Generate Google Spreadsheet SPARKLINE formulas for uncapped data
-    google_sparkline_new_uncapped = generate_google_sparkline_uncapped(np.minimum(new_lines, np.percentile(new_lines, 99)), 'green')
-    google_sparkline_old_uncapped = generate_google_sparkline_uncapped(np.minimum(old_lines, np.percentile(old_lines, 99)), 'orange')
+    google_sparkline_new_uncapped = generate_google_sparkline_uncapped(new_lines, 'green')
+    google_sparkline_old_uncapped = generate_google_sparkline_uncapped(old_lines, 'orange')
 
-    print(f"New Lines per Month (99th percentile)||||", google_sparkline_new_uncapped)
-    print(f"Changed Lines per Month (99th percentile)||||", google_sparkline_old_uncapped)
+    print(f"New Lines per Month||||", google_sparkline_new_uncapped)
+    print(f"Changed Lines per Month||||", google_sparkline_old_uncapped)
+
+    # Generate Google Spreadsheet SPARKLINE formulas for percentile data
+    google_sparkline_new_percentile = generate_google_sparkline_uncapped(np.minimum(new_lines, np.percentile(new_lines, 99)), 'green')
+    google_sparkline_old_percentile = generate_google_sparkline_uncapped(np.minimum(old_lines, np.percentile(old_lines, 99)), 'orange')
+
+    print(f"New Lines per Month (99th percentile)||||", google_sparkline_new_percentile)
+    print(f"Changed Lines per Month (99th percentile)||||", google_sparkline_old_percentile)
 
     # Array of cap values
     cap_values = [2500, 1000, 100]

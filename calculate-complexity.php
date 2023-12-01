@@ -20,7 +20,8 @@ register_shutdown_function( static function () {
 		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $csvFile ) );
 	}
 
-	evaluate_scores();
+	evaluate_complexity_score();
+	evaluate_maintenability_score();
 
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
@@ -39,11 +40,14 @@ register_shutdown_function( static function () {
 			$row['(php) New Lines per Month (Capped at 2500)'],
 			$row['(php) Changed Lines per Month (Capped at 2500)'],
 			$row['(php) New Lines per Month (Capped at 1000)'],
+			$row['(php) New Lines per Month'],
+			$row['(php) Changed Lines per Month'],
 			$row['Public Functions'],
 			$row['Protected/Private Functions'],
 			$row['Static Functions'],
 			$row['Slug'],
 			$row['PHP File List'],
+			$row['PHP Activity Over Time'],
 			$row['RelativePluginDir'],
 			$row['HerculesWhitelist'],
 		);
@@ -106,7 +110,7 @@ evaluate_bus_factor();
 evaluate_change_concentration();
 evaluate_php_activity_hercules();
 
-function evaluate_scores() {
+function evaluate_complexity_score() {
 	/**
 	 * Available array keys in $row for calculating complexity factor:
 	 * Extension    Aggregated Rating    WPORG Rating    WOOCOM Rating    WPORG Rating Count    WOOCOM Rating Count    WPORG Installations    Playwright Tests    Playwright LOC    wp-browser E2E Tests    wp-browser E2E LOC    Puppeteer E2E Tests    Puppeteer E2E LOC    wp-browser Unit Tests    wp-browser Unit LOC    PHPUnit Tests    PHPUnit LOC    Code Style Tests    QIT Integration    Autoloader    WPORG Supp    Resolved    PHP LOC    PHP Files    Static %    Encapsulated    self::/static::    Require/Include    Class Injections    Avg Methods per Classes    Total Method LOC    Average Method LOC    Longest Method LOC    Total Class LOC    Average Class LOC    Longest Class LOC    OOP LOCs    Total Cyclomatic Complexity    Average Cyclomatic Complexity    Biggest Cyclomatic Complexity    Unit Tests to PHP LOC    Unit Tests to OOP LOC    E2E Tests to PHP LOC    E2E Tests to OOP LOC    Tests to PHP LOC    Tests to OOP LOC    BusFactor    Top Changed PHP Files    Change Concentration    (php) Changed Lines per Month (99th percentile)                                                        (php) Changed Lines per Month (Capped at 2500)
@@ -119,15 +123,10 @@ function evaluate_scores() {
 
 	// First iteration to find min and max values
 	foreach ( $GLOBALS['csvData'] as $row ) {
-		if ( isset( $row['Total Cyclomatic Complexity'], $row['Average Cyclomatic Complexity'] ) &&
-		     is_numeric( $row['Total Cyclomatic Complexity'] ) &&
-		     is_numeric( $row['Average Cyclomatic Complexity'] ) ) {
-
-			$minTotal   = min( $minTotal, $row['Total Cyclomatic Complexity'] );
-			$maxTotal   = max( $maxTotal, $row['Total Cyclomatic Complexity'] );
-			$minAverage = min( $minAverage, $row['Average Cyclomatic Complexity'] );
-			$maxAverage = max( $maxAverage, $row['Average Cyclomatic Complexity'] );
-		}
+		$minTotal   = min( $minTotal, $row['Total Cyclomatic Complexity'] );
+		$maxTotal   = max( $maxTotal, $row['Total Cyclomatic Complexity'] );
+		$minAverage = min( $minAverage, $row['Average Cyclomatic Complexity'] );
+		$maxAverage = max( $maxAverage, $row['Average Cyclomatic Complexity'] );
 	}
 
 	// Second iteration to calculate complexity scores
@@ -145,6 +144,18 @@ function evaluate_scores() {
 		} else {
 			$row['Complexity Score'] = 0;  // Default score if data is missing or not numeric
 		}
+	}
+}
+
+function evaluate_maintenability_score() {
+	/**
+	 * Available array keys in $row for calculating maintenability score:
+	 * Extension,Aggregated Rating,WPORG Rating,WOOCOM Rating,WPORG Rating Count,WOOCOM Rating Count,WPORG Installations,Playwright Tests,Playwright LOC,wp-browser E2E Tests,wp-browser E2E LOC,Puppeteer E2E Tests,Puppeteer E2E LOC,wp-browser Unit Tests,wp-browser Unit LOC,PHPUnit Tests,PHPUnit LOC,Code Style Tests,QIT Integration,Autoloader,WPORG Supp,Resolved,PHP LOC,PHP Files,self::/static::,Require/Include,Class Injections,Encapsulated,Static %,Avg Methods per Classes,Total Method LOC,Average Method LOC,Longest Method LOC,Total Class LOC,Average Class LOC,Longest Class LOC,OOP LOCs,Total Cyclomatic Complexity,Average Cyclomatic Complexity,Biggest Cyclomatic Complexity,Unit Tests to PHP LOC,Unit Tests to OOP LOC,E2E Tests to PHP LOC,E2E Tests to OOP LOC,Tests to PHP LOC,Tests to OOP LOC,BusFactor,Top Changed PHP Files,Change Concentration,Complexity Score,(php) Changed Lines per Month (99th percentile)                                                     ,(php) Changed Lines per Month (Capped at 1000)
+	 */
+
+	// First iteration to find min and max values
+	foreach ( $GLOBALS['csvData'] as $row ) {
+		$row['Maintenability Score'] = '';
 	}
 }
 
@@ -653,13 +664,13 @@ function evaluate_php_loc() {
 
 		$count_php_metrics = static function ( RecursiveIteratorIterator $it ) use ( $plugin_dir ): array {
 			$metrics = [
-				'self_static_usage'           => 0,
-				'has_autoloader'              => 'No',
-				'requires'                    => 0,
-				'class_injections'            => 0,
-				'num_php_files'               => 0,
-				'php_file_list'               => [],
-				'longest_method'              => 0,
+				'self_static_usage' => 0,
+				'has_autoloader'    => 'No',
+				'requires'          => 0,
+				'class_injections'  => 0,
+				'num_php_files'     => 0,
+				'php_file_list'     => [],
+				'longest_method'    => 0,
 			];
 
 			$command = "find $plugin_dir -path '*/tests/*' -prune -o -name '*.php' -exec wc -l {} +";
@@ -839,7 +850,7 @@ function evaluate_phpmd() {
 								// Update total method length
 								$phpmd_cache['total_method_length'] += $length;
 
-								// Update longest method length
+								// Update the longest method length
 								if ( $length > $phpmd_cache['longest_method_length'] ) {
 									$phpmd_cache['longest_method_length'] = $length;
 								}
@@ -863,7 +874,7 @@ function evaluate_phpmd() {
 								// Update total method length
 								$phpmd_cache['total_class_length'] += $length;
 
-								// Update longest method length
+								// Update the longest method length
 								if ( $length > $phpmd_cache['longest_class_length'] ) {
 									$phpmd_cache['longest_class_length'] = $length;
 								}
@@ -1282,13 +1293,38 @@ function evaluate_php_activity_hercules() {
 			}
 		}
 
+		$development_activity = [];
+
 		foreach ( $longest_graphs as $column => $maxLength ) {
 			foreach ( $GLOBALS['csvData'] as &$row ) {
 				if ( isset( $row[ $column ] ) ) {
 					// Match the numerical data within the SPARKLINE structure
 					if ( preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $row[ $column ], $matches ) ) {
 						$graphNumbers  = explode( ',', $matches[1] );
+
+						$graphNumbers = array_map('intval', $graphNumbers);
+
+						// Mailpoet moved their development directory, so let's take that into account.
+						if ( $row['Slug'] === 'mailpoet' ) {
+							// Ignore any value below 500.
+							$graphNumbers = array_filter( $graphNumbers, static function ( $value ) {
+								return $value > 500;
+							} );
+						}
+
 						$currentLength = count( $graphNumbers );
+
+						if ( ! array_key_exists( $row['Slug'], $development_activity ) ) {
+							$development_activity[ $row['Slug'] ] = [];
+						}
+
+						if ( str_contains( $column, 'Changed Lines per Month (99th percentile)' ) ) {
+							$development_activity[ $row['Slug'] ]["{$lang}_changed_lines"] = $graphNumbers;
+						}
+
+						if ( str_contains( $column, 'New Lines per Month (99th percentile)' ) ) {
+							$development_activity[ $row['Slug'] ]["{$lang}_new_lines"] = $graphNumbers;
+						}
 
 						if ( $currentLength < $maxLength ) {
 							// Pad the graph with zeros from the left
@@ -1313,6 +1349,85 @@ function evaluate_php_activity_hercules() {
 				}
 			}
 			unset( $row ); // Unset the reference to the last element
+		}
+
+		foreach ( $development_activity as $slug => $data ) {
+			$total_lines = [];
+
+			foreach ( $data as $key => $values ) {
+				// Extract language and type (new or changed)
+				preg_match( '/^(.*)_([a-z]+_lines)$/', $key, $matches );
+				$language = $matches[1];
+				$type     = $matches[2];
+
+				// Create a unique key for each language
+				$totalKey = "{$language}_total_lines";
+
+				if ( ! isset( $total_lines[ $totalKey ] ) ) {
+					$total_lines[ $totalKey ] = array_fill( 0, count( $values ), 0 );
+				}
+
+				// Sum the values
+				foreach ( $values as $index => $value ) {
+					if ( isset( $total_lines[ $totalKey ][ $index ] ) ) {
+						$total_lines[ $totalKey ][ $index ] += $value;
+					} else {
+						$total_lines[ $totalKey ][ $index ] = $value;
+					}
+				}
+			}
+
+			// Calculate development activity over the years
+			foreach ( $total_lines as $languageKey => $lineCounts ) {
+				// Convert the string numbers in lineCounts to integers
+				$lineCountsInt = array_map( 'intval', $lineCounts );
+
+				// Find the first non-zero month
+				$startMonth = 0;
+				foreach ( $lineCountsInt as $index => $value ) {
+					if ( $value > 0 ) {
+						$startMonth = $index;
+						break;
+					}
+				}
+
+				// Realign the array starting from the first non-zero month
+				$realignedCounts = array_slice( $lineCountsInt, $startMonth );
+
+				// Split the realigned array into chunks of 12 (each representing a year)
+				$years = array_chunk( $realignedCounts, 12 );
+
+				// Calculate the total of the first 12 months (or the first year's data available)
+				$firstYearTotal = isset( $years[0] ) ? array_sum( $years[0] ) : 0;
+
+				// Initialize an array to store activity percentages for each year
+				$yearlyActivityPercentages = [];
+
+				foreach ( $years as $year ) {
+					// Calculate the total activity for each year
+					$yearTotal = array_sum( $year );
+
+					// Calculate the percentage relative to the first year total
+					$percentage                  = $firstYearTotal ? ( $yearTotal / $firstYearTotal * 100 ) : 0;
+					$yearlyActivityPercentages[] = intval( $percentage ) . '%';
+				}
+
+				// Calculate the average activity compared to the first year
+				// Exclude the first year (100%) from the average calculation
+				if ( count( $yearlyActivityPercentages ) > 1 ) {
+					$sumPercentages = array_sum( array_slice( $yearlyActivityPercentages, 1 ) );
+					$average        = $sumPercentages / ( count( $yearlyActivityPercentages ) - 1 );
+				} else {
+					// If there's only one year, set average to 100%
+					$average = 100;
+				}
+
+				$langDisplay = $lang === 'php' ? 'PHP' : 'JS';
+
+				// Store or use $yearlyActivityPercentages as needed
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]       = implode( ", ", $yearlyActivityPercentages );
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Avg Compared to 1st Year' ] = "$average%";
+			}
 		}
 	}
 }
