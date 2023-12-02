@@ -1,25 +1,31 @@
 <?php
 $GLOBALS['csvData'] = [];
 
-@unlink( __DIR__ . '/quality-vs-ratings-out.csv' );
+if ( ! isset( $argv[1] ) || ! isset( $argv[2] ) ) {
+	die( "Call this script using parallel.php\n" );
+}
+
+$parallel_repos = $argv[1] ?? null;
+$parallel_index = $argv[2] ?? null;
 
 $GLOBALS['vendor_directories'] = [
 	'vendor',
 	'node_modules',
 	'vendor_prefixed',
 ];
+$GLOBALS['parallel_repos']     = explode( ',', $parallel_repos );
 
-register_shutdown_function( static function () {
+register_shutdown_function( static function () use ( $parallel_index ) {
 	// Save the data to a CSV File.
-	$csvFile = __DIR__ . '/quality-vs-ratings-out.csv';
-	$gptFile = __DIR__ . '/quality-vs-ratings-out-gpt.csv';
+	$humanCsvFile   = __DIR__ . "/human-$parallel_index.csv";
+	$machineCsvFile = __DIR__ . "/machine-$parallel_index.csv";
 
-	$fileHandle    = fopen( $csvFile, 'w' );
-	$fileHandleGpt = fopen( $gptFile, 'w' );
+	$fileHandle    = fopen( $humanCsvFile, 'w' );
+	$fileHandleGpt = fopen( $machineCsvFile, 'w' );
 
 	// Check if the file was opened successfully.
 	if ( $fileHandle === false ) {
-		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $csvFile ) );
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $humanCsvFile ) );
 	}
 
 	if ( $fileHandleGpt === false ) {
@@ -29,9 +35,19 @@ register_shutdown_function( static function () {
 	#evaluate_complexity_score();
 	#evaluate_maintenability_score();
 
-	$writeToCsv = static function ( $fileHandle, $rows ) {
+	$writeToCsv = static function ( $fileHandle, $rows, bool $isHuman ) {
+		// Determine the correct headers file based on the flag
+		$headersFile       = $isHuman ? __DIR__ . "/human-headers.csv" : __DIR__ . "/machine-headers.csv";
+		$headersFileHandle = fopen( $headersFile, 'w' );
+
+		// Check if the headers file was opened successfully
+		if ( $headersFileHandle === false ) {
+			throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $headersFile ) );
+		}
+
 		// Add headers.
-		fputcsv( $fileHandle, array_keys( $rows[ array_rand( $rows ) ] ) );
+		fputcsv( $headersFileHandle, array_keys( $rows[ array_rand( $rows ) ] ) );
+		fclose( $headersFileHandle );
 
 		foreach ( $rows as $slug => $row ) {
 			// Check each item in $row to ensure it's scalar.
@@ -130,7 +146,7 @@ register_shutdown_function( static function () {
 	/*
 	 * Generate a CSV file that is friendly to programmatic interactions.
 	 */
-	$programmaticCSv = $humanCsv;
+	$programmaticCsv = $humanCsv;
 
 	// After we did all the operations, let's do some final operations that are specific to human CSV.
 	foreach ( $humanCsv as $key => &$row ) {
@@ -143,7 +159,7 @@ register_shutdown_function( static function () {
 		);
 	}
 
-	$writeToCsv( $fileHandle, $humanCsv );
+	$writeToCsv( $fileHandle, $humanCsv, true );
 
 	$possible_qit_integrations = [
 		'api'        => 'API',
@@ -154,7 +170,7 @@ register_shutdown_function( static function () {
 		'security'   => 'Security'
 	];
 
-	foreach ( $programmaticCSv as &$g ) {
+	foreach ( $programmaticCsv as &$g ) {
 		foreach ( $g as $key => &$value ) {
 			if ( str_contains( $key, '%' ) ) {
 				$g[ str_replace( '%', 'Percentage', $key ) ] = $value;
@@ -248,7 +264,7 @@ register_shutdown_function( static function () {
 		);
 	}
 
-	$writeToCsv( $fileHandleGpt, $programmaticCSv );
+	$writeToCsv( $fileHandleGpt, $programmaticCsv, false );
 } );
 
 load_csv();
@@ -428,7 +444,7 @@ function evaluate_maintenability_score() {
 }
 
 function load_csv() {
-	$csvFile = __DIR__ . '/quality-vs-ratings.csv';
+	$csvFile = __DIR__ . '/input.csv';
 
 	if ( ( $handle = fopen( $csvFile, 'r' ) ) !== false ) {
 		// Get the first row of the CSV file as column headers
@@ -444,7 +460,9 @@ function load_csv() {
 				throw new Exception( "Invalid slug" );
 			}
 
-			$GLOBALS['csvData'][ $slug ] = array_combine( $headers, $row );
+			if ( in_array( $slug, $GLOBALS['parallel_repos'] ) ) {
+				$GLOBALS['csvData'][ $slug ] = array_combine( $headers, $row );
+			}
 		}
 		fclose( $handle );
 	}
@@ -1606,8 +1624,16 @@ function evaluate_php_activity_hercules() {
 				// Navigate to the repository directory.
 				chdir( $repo_dir );
 
+				$blacklist = '';
+
+				if ( str_contains( $repo_dir, 'mailpoet' ) ) {
+					// Except tests
+					$row['HerculesWhitelist'] = '';
+					$blacklist                = '--skip-blacklist --blacklisted-prefixes "tests"';
+				}
+
 				// Define the hercules command
-				$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --first-parent --devs --languages $lang /repo {$row['HerculesWhitelist']} > $yml_cache_filepath";
+				$herculesCommand = "docker run --env MPLCONFIGDIR=/cache/matplotlib --rm -v $(pwd):/repo --user $(id -u):$(id -g) srcd/hercules hercules --first-parent --devs --languages $lang /repo {$row['HerculesWhitelist']} $blacklist > $yml_cache_filepath";
 
 				echo $herculesCommand;
 
@@ -1670,25 +1696,17 @@ function evaluate_php_activity_hercules() {
 
 						$graphNumbers = array_map( 'intval', $graphNumbers );
 
-						// Mailpoet moved their development directory, so let's take that into account.
-						if ( $row['Slug'] === 'mailpoet' ) {
-							// Ignore any value below 500.
-							$graphNumbers = array_filter( $graphNumbers, static function ( $value ) {
-								return $value > 500;
-							} );
-						}
-
 						$currentLength = count( $graphNumbers );
 
 						if ( ! array_key_exists( $row['Slug'], $development_activity ) ) {
 							$development_activity[ $row['Slug'] ] = [];
 						}
 
-						if ( str_contains( $column, 'Changed Lines per Month' ) ) {
+						if ( $column === "Changed Lines per Month" ) {
 							$development_activity[ $row['Slug'] ]["{$lang}_changed_lines"] = $graphNumbers;
 						}
 
-						if ( str_contains( $column, 'New Lines per Month' ) ) {
+						if ( $column === "New Lines per Month" ) {
 							$development_activity[ $row['Slug'] ]["{$lang}_new_lines"] = $graphNumbers;
 						}
 

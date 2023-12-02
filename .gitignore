@@ -12,7 +12,13 @@ quality-vs-ratings.csv
 
 repos-original/
 
-quality-vs-ratings-out.csv
+input.csv
+human.csv
+machine.csv
+
+python/spaghetti
+
+cache2
 
 hercules
 !hercules/python/labours/modes/old_vs_new.py
