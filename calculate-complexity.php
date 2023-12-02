@@ -35,7 +35,10 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 	#evaluate_complexity_score();
 	#evaluate_maintenability_score();
 
-	$writeToCsv = static function ( $fileHandle, $rows, bool $isHuman ) {
+	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman ) {
+		$expected      = $rows[ array_rand( $rows ) ];
+		$expectedCount = count( $expected );
+
 		// Determine the correct headers file based on the flag
 		$headersFile       = $isHuman ? __DIR__ . "/human-headers.csv" : __DIR__ . "/machine-headers.csv";
 		$headersFileHandle = fopen( $headersFile, 'w' );
@@ -50,6 +53,12 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		fclose( $headersFileHandle );
 
 		foreach ( $rows as $slug => $row ) {
+			// Check if the current row has the expected number of elements
+			if ( count( $row ) !== $expectedCount ) {
+				// Throw an exception if the count is different
+				throw new Exception( "Row count mismatch for slug '$slug'. Expected $expectedCount elements, found " . count( $row ) . ". Missing: " . implode( ',', array_diff_key( $expected, $row ) ) );
+			}
+
 			// Check each item in $row to ensure it's scalar.
 			foreach ( $row as $key => &$value ) {
 				if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
@@ -206,10 +215,10 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 
 					$years = ceil( count( $locs_per_month ) / 12 ); // Calculate the number of years
 
-					for ( $year = 0; $year < $years; $year ++ ) {
+					for ( $year = 1; $year <= $years; $year ++ ) {
 						$yearly_sum = 0;
 						for ( $month = 0; $month < 12; $month ++ ) {
-							$index = $year * 12 + $month;
+							$index = ( $year - 1 ) * 12 + $month;
 
 							// This is needed for the last year, which might not have 12 months.
 							if ( $index >= count( $locs_per_month ) ) {
@@ -261,6 +270,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			$g['Resolved'],
 			$g['Top Changed PHP Files'],
 			$g['BusFactor'],
+			$g['Resolved Percentage'],
 		);
 	}
 
@@ -612,10 +622,14 @@ function evaluate_tests() {
 
 		$overrides = [
 			'woocommerce'            => [
-				'e2e' => 'e2e-pw',
+				'e2e'  => 'e2e-pw',
+				'unit' => 'php',
 			],
 			'woocommerce-pre-orders' => [
 				'unit' => 'includes',
+			],
+			'google-listings-and-ads' => [
+				'unit' => 'Unit',
 			],
 		];
 
