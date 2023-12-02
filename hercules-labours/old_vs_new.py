@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import numpy as np
 from collections import defaultdict, namedtuple
+import scipy.stats as sp_stats
 
 class DevDay(
     namedtuple("DevDay", ("Commits", "Added", "Removed", "Changed", "Languages"))
@@ -97,8 +98,18 @@ def show_old_vs_new(
     print(f"New Lines per Month (99th percentile)||||", google_sparkline_new_percentile)
     print(f"Changed Lines per Month (99th percentile)||||", google_sparkline_old_percentile)
 
+    new_lines_without_max = np.delete(new_lines, np.argmax(new_lines))
+    old_lines_without_max = np.delete(old_lines, np.argmax(old_lines))
+
+    # Generate Google Spreadsheet SPARKLINE formulas for trimmed data
+    google_sparkline_new_trimmed = generate_google_sparkline_uncapped(new_lines_without_max, 'green')
+    google_sparkline_old_trimmed = generate_google_sparkline_uncapped(old_lines_without_max, 'orange')
+
+    print(f"New Lines per Month (Except highest month)||||", google_sparkline_new_trimmed)
+    print(f"Changed Lines per Month (Except highest month)||||", google_sparkline_old_trimmed)
+
     # Array of cap values
-    cap_values = [2500, 1000, 100]
+    cap_values = [5000, 2500, 1000, 100]
 
     # Iterate over each cap value
     for cap_value in cap_values:

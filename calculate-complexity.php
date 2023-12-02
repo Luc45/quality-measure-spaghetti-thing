@@ -12,16 +12,45 @@ $GLOBALS['vendor_directories'] = [
 register_shutdown_function( static function () {
 	// Save the data to a CSV File.
 	$csvFile = __DIR__ . '/quality-vs-ratings-out.csv';
+	$gptFile = __DIR__ . '/quality-vs-ratings-out-gpt.csv';
 
-	$fileHandle = fopen( $csvFile, 'w' );
+	$fileHandle    = fopen( $csvFile, 'w' );
+	$fileHandleGpt = fopen( $gptFile, 'w' );
 
 	// Check if the file was opened successfully.
 	if ( $fileHandle === false ) {
 		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $csvFile ) );
 	}
 
-	evaluate_complexity_score();
-	evaluate_maintenability_score();
+	if ( $fileHandleGpt === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleGpt ) );
+	}
+
+	#evaluate_complexity_score();
+	#evaluate_maintenability_score();
+
+	$writeToCsv = static function ( $fileHandle, $rows ) {
+		// Add headers.
+		fputcsv( $fileHandle, array_keys( $rows[ array_rand( $rows ) ] ) );
+
+		foreach ( $rows as $slug => $row ) {
+			// Check each item in $row to ensure it's scalar.
+			foreach ( $row as $key => &$value ) {
+				if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
+					throw new InvalidArgumentException( sprintf( 'Non-scalar value encountered at key "%s": %s', $key, print_r( $value, true ) ) );
+				}
+
+				// Make all graph columns same size for consistency.
+				if ( str_contains( $key, 'SPARKLINE' ) ) {
+					unset( $row[ $key ] );
+					$rows[ str_pad( $key, 100, ' ', STR_PAD_RIGHT ) ] = $value;
+				}
+			}
+
+			fputcsv( $fileHandle, $row );
+		}
+		fclose( $fileHandle );
+	};
 
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
@@ -34,65 +63,192 @@ register_shutdown_function( static function () {
 			$row['WOOCOM URL'],
 			$row['Dependency Injection'],
 			$row['WOOCOM Installations'],
-			$row['(php) New Lines per Month (Capped at 100)'],
-			$row['(php) Changed Lines per Month (Capped at 100)'],
-			$row['(php) New Lines per Month (99th percentile)'],
-			$row['(php) New Lines per Month (Capped at 2500)'],
-			$row['(php) Changed Lines per Month (Capped at 2500)'],
-			$row['(php) New Lines per Month (Capped at 1000)'],
+
+			# Uncapped Graph. (Comment-out to include in output CSV.)
 			$row['(php) New Lines per Month'],
 			$row['(php) Changed Lines per Month'],
+			$row['(javascript) New Lines per Month'],
+			$row['(javascript) Changed Lines per Month'],
+
+			# Graph normalized to 99th percentile. (Comment-out to include in output CSV.)
+			$row['(php) New Lines per Month (99th percentile)'],
+			$row['(php) Changed Lines per Month (99th percentile)'],
+			$row['(javascript) New Lines per Month (99th percentile)'],
+			$row['(javascript) Changed Lines per Month (99th percentile)'],
+
+			# Uncapped graph, with the highest month removed. (Comment-out to include in output CSV.)
+			$row['(php) Changed Lines per Month (Except highest month)'],
+			$row['(php) New Lines per Month (Except highest month)'],
+			$row['(javascript) New Lines per Month (Except highest month)'],
+			$row['(javascript) Changed Lines per Month (Except highest month)'],
+
+			# Graph capped at 100 LOC changes per month. (Comment-out to include in output CSV.)
+			$row['(php) New Lines per Month (Capped at 100)'],
+			$row['(php) Changed Lines per Month (Capped at 100)'],
+			$row['(javascript) New Lines per Month (Capped at 100)'],
+			$row['(javascript) Changed Lines per Month (Capped at 100)'],
+
+			# Graph capped at 1000 LOC changes per month. (Comment-out to include in output CSV.)
+			#$row['(php) New Lines per Month (Capped at 1000)'],
+			#$row['(php) Changed Lines per Month (Capped at 1000)'],
+			#$row['(javascript) New Lines per Month (Capped at 1000)'],
+			#$row['(javascript) Changed Lines per Month (Capped at 1000)'],
+
+			# Graph capped at 2500 LOC changes per month. (These are handled in a special way for the Programmatic CSV.)
+			# $row['(php) New Lines per Month (Capped at 2500)'],
+			# $row['(php) Changed Lines per Month (Capped at 2500)'],
+			# $row['(javascript) New Lines per Month (Capped at 2500)'],
+			# $row['(javascript) Changed Lines per Month (Capped at 2500)'],
+
 			$row['Public Functions'],
 			$row['Protected/Private Functions'],
 			$row['Static Functions'],
 			$row['Slug'],
 			$row['PHP File List'],
 			$row['PHP Activity Over Time'],
+			$row['JS Activity Over Time'],
 			$row['RelativePluginDir'],
 			$row['HerculesWhitelist'],
 		);
-
-		// Make all graph columns same size for consistency.
-		foreach ( $row as $col_name => $col_value ) {
-			if ( str_contains( $col_value, 'SPARKLINE' ) ) {
-				unset( $row[ $col_name ] );
-				$row[ str_pad( $col_name, 100, ' ', STR_PAD_RIGHT ) ] = $col_value;
-			}
-		}
 	}
 
-	$data = [];
+	$humanCsv = [];
 
 	// Set the order of some columns.
 	foreach ( $GLOBALS['csvData'] as $key => &$row ) {
-		$data[ $key ]                      = [];
-		$data[ $key ]['Extension']         = $row['﻿Extension'];
-		$data[ $key ]['Aggregated Rating'] = $row['Aggregated Rating'];
+		$humanCsv[ $key ]                      = [];
+		$humanCsv[ $key ]['Extension']         = $row['﻿Extension'];
+		$humanCsv[ $key ]['Aggregated Rating'] = $row['Aggregated Rating'];
 
 		unset(
 			$row['﻿Extension'],
 			$row['Aggregated Rating']
 		);
-		$data[ $key ] = array_merge( $data[ $key ], $row );
+		$humanCsv[ $key ] = array_merge( $humanCsv[ $key ], $row );
 	}
 
-	// Add headers.
-	fputcsv( $fileHandle, array_keys( $data[ array_rand( $data ) ] ) );
+	/*
+	 * Generate a CSV file that is friendly to programmatic interactions.
+	 */
+	$programmaticCSv = $humanCsv;
 
-	// Iterate over the array to write each row to the CSV file.
-	foreach ( $data as $foo => $r ) {
-		// Check each item in $row to ensure it's scalar.
-		foreach ( $r as $key => $value ) {
-			if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
-				throw new InvalidArgumentException( sprintf( 'Non-scalar value encountered at key "%s": %s', $key, print_r( $value, true ) ) );
+	// After we did all the operations, let's do some final operations that are specific to human CSV.
+	foreach ( $humanCsv as $key => &$row ) {
+		unset(
+			// We need this values in the programmatic CSV, but we don't want them in the human one.
+			$row['(php) New Lines per Month (Capped at 2500)'],
+			$row['(php) Changed Lines per Month (Capped at 2500)'],
+			$row['(javascript) New Lines per Month (Capped at 2500)'],
+			$row['(javascript) Changed Lines per Month (Capped at 2500)'],
+		);
+	}
+
+	$writeToCsv( $fileHandle, $humanCsv );
+
+	$possible_qit_integrations = [
+		'api'        => 'API',
+		'e2e'        => 'E2E',
+		'activation' => 'Activation',
+		'phpstan'    => 'PHPStan',
+		// 'phpcompatibility' => 'PHPCompatibility', // (zero uses it, so it leaves a blank line in the correlation heatmap)
+		'security'   => 'Security'
+	];
+
+	foreach ( $programmaticCSv as &$g ) {
+		foreach ( $g as $key => &$value ) {
+			if ( str_contains( $key, '%' ) ) {
+				$g[ str_replace( '%', 'Percentage', $key ) ] = $value;
+				unset( $g[ $key ] );
+			}
+
+			if ( $key === 'QIT Integration' ) {
+				// Explode integrations by comma, and them as rows with boolean values and remove original.
+				$integrations = explode( ',', $value );
+				foreach ( $possible_qit_integrations as $k => $v ) {
+					$g["QIT $v CI"] = in_array( $k, $integrations, true ) ? 1 : 0;
+				}
+				unset( $g[ $key ] );
 			}
 		}
 
-		fputcsv( $fileHandle, $r );
+		foreach ( $g as $key => &$value ) {
+			if ( str_contains( $value, 'SPARKLINE' ) ) {
+				/*
+				 * If we are processing any of the uncapped LOC graphs,
+				 * use them to calculate LOCs per Year for the Correlation Heatmap.
+				 */
+				if ( in_array( $key,
+					[
+						'(php) New Lines per Month (Capped at 2500)',
+						'(php) Changed Lines per Month (Capped at 2500)',
+						'(javascript) New Lines per Month (Capped at 2500)',
+						'(javascript) Changed Lines per Month (Capped at 2500)',
+					]
+				) ) {
+					preg_match( '/=SPARKLINE\(\{([^}]+)\}/', $value, $matches );
+					$locs_per_month = explode( ',', $matches[1] );
+
+					$years = ceil( count( $locs_per_month ) / 12 ); // Calculate the number of years
+
+					for ( $year = 0; $year < $years; $year ++ ) {
+						$yearly_sum = 0;
+						for ( $month = 0; $month < 12; $month ++ ) {
+							$index = $year * 12 + $month;
+
+							// This is needed for the last year, which might not have 12 months.
+							if ( $index >= count( $locs_per_month ) ) {
+								continue;
+							}
+
+							$yearly_sum += (int) $locs_per_month[ $index ];
+						}
+						$g["LOCs on Year $year"] = $yearly_sum;
+					}
+				}
+
+				unset( $g[ $key ] );
+			}
+
+			if ( str_ends_with( $value, '%' ) ) {
+				if ( str_contains( $key, 'Percentage' ) ) {
+					$value = rtrim( $value, '%' );
+				} else {
+					$g["{$key} Percentage"] = rtrim( $value, '%' );
+					unset( $g[ $key ] );
+				}
+			}
+
+			if ( empty( $value ) ) {
+				$value = 0;
+			}
+
+			if ( $key === 'Autoloader' ) {
+				$g['Autoloader'] = $value === 'No' ? 0 : 1;
+			}
+
+			if ( $value === 'Yes' ) {
+				$value = 1;
+			} elseif ( $value === 'No' ) {
+				$value = 0;
+			}
+		}
+
+		unset(
+			$g['Extension'],
+			$g['Aggregated Rating'],
+			$g['WPORG Rating'],
+			$g['WOOCOM Rating'],
+			$g['WPORG Rating Count'],
+			$g['WOOCOM Rating Count'],
+			$g['WPORG Installations'],
+			$g['WPORG Supp'],
+			$g['Resolved'],
+			$g['Top Changed PHP Files'],
+			$g['BusFactor'],
+		);
 	}
 
-	// Close the file handle.
-	fclose( $fileHandle );
+	$writeToCsv( $fileHandleGpt, $programmaticCSv );
 } );
 
 load_csv();
@@ -129,6 +285,9 @@ function evaluate_complexity_score() {
 		$maxAverage = max( $maxAverage, $row['Average Cyclomatic Complexity'] );
 	}
 
+	// Define a minimal base score
+	$baseScore = 0.1;  // Adjust this value as needed
+
 	// Second iteration to calculate complexity scores
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		if ( isset( $row['Total Cyclomatic Complexity'], $row['Average Cyclomatic Complexity'] ) &&
@@ -140,22 +299,131 @@ function evaluate_complexity_score() {
 			$normalizedAverage = max( 0, min( 100, ( $row['Average Cyclomatic Complexity'] - $minAverage ) / ( $maxAverage - $minAverage ) * 100 ) );
 
 			// Calculate the weighted average of the normalized complexities
-			$row['Complexity Score'] = ( $normalizedTotal * 0.4 + $normalizedAverage * 0.6 );
+			$row['Complexity Score'] = max( $baseScore, ( $normalizedTotal * 0.4 + $normalizedAverage * 0.6 ) );
 		} else {
-			$row['Complexity Score'] = 0;  // Default score if data is missing or not numeric
+			$row['Complexity Score'] = $baseScore;  // Assign base score if data is missing or not numeric
 		}
 	}
 }
 
+/**
+ * - Code Quality and Integration Tests:
+ * Code Style Tests (Yes/No)
+ * QIT Integration (api, e2e, activation, phpstan, phpcompatibility, security)
+ * Autoloader (Composer/\d spl_autoload_register/No)
+ *
+ * - Code Size and Complexity:
+ * PHP LOC (Int of PHP LOC)
+ * PHP Files (Int of PHP Files)
+ * Total Method LOC (Int of total method LOC)
+ * Total Class LOC (Int of total class LOC)
+ * OOP LOCs (Int of OOP LOCs)
+ * Total Cyclomatic Complexity (Int of total cyclomatic complexity)
+ *
+ * - Code Structure and Organization:
+ * self::/static:: (Int of self::/static::)
+ * Require/Include (Int of require/include)
+ * Class Injections (Int of class injections)
+ *
+ * - Code Maintainability and Evolution:
+ * Encapsulated (Percentage of encapsulated OOP methods)
+ * Static % (Percentage of static methods)
+ * Avg Methods per Classes (Float of avg methods per class)
+ * Average Method LOC (Float of average method LOC)
+ * Average Class LOC (Float of average class LOC)
+ * Average Cyclomatic Complexity (Float of average cyclomatic complexity)
+ * Change Concentration (Percentage of change concentration)
+ * PHP Avg Compared to 1st Year (Float of PHP LOC compared to 1st year)
+ * Tests to OOP LOC (Percentage of tests to OOP LOC)
+ */
 function evaluate_maintenability_score() {
-	/**
-	 * Available array keys in $row for calculating maintenability score:
-	 * Extension,Aggregated Rating,WPORG Rating,WOOCOM Rating,WPORG Rating Count,WOOCOM Rating Count,WPORG Installations,Playwright Tests,Playwright LOC,wp-browser E2E Tests,wp-browser E2E LOC,Puppeteer E2E Tests,Puppeteer E2E LOC,wp-browser Unit Tests,wp-browser Unit LOC,PHPUnit Tests,PHPUnit LOC,Code Style Tests,QIT Integration,Autoloader,WPORG Supp,Resolved,PHP LOC,PHP Files,self::/static::,Require/Include,Class Injections,Encapsulated,Static %,Avg Methods per Classes,Total Method LOC,Average Method LOC,Longest Method LOC,Total Class LOC,Average Class LOC,Longest Class LOC,OOP LOCs,Total Cyclomatic Complexity,Average Cyclomatic Complexity,Biggest Cyclomatic Complexity,Unit Tests to PHP LOC,Unit Tests to OOP LOC,E2E Tests to PHP LOC,E2E Tests to OOP LOC,Tests to PHP LOC,Tests to OOP LOC,BusFactor,Top Changed PHP Files,Change Concentration,Complexity Score,(php) Changed Lines per Month (99th percentile)                                                     ,(php) Changed Lines per Month (Capped at 1000)
-	 */
+	// Inline function for normalization
+	$normalize = function ( $value, $min = null, $max = null ) {
+		// Remove percentage sign and convert to float if necessary
+		if ( str_contains( $value, '%' ) ) {
+			$value = rtrim( $value, '%' );
 
-	// First iteration to find min and max values
-	foreach ( $GLOBALS['csvData'] as $row ) {
-		$row['Maintenability Score'] = '';
+			return $value;
+		}
+
+		if ( is_null( $min ) || is_null( $max ) ) {
+			throw new \LogicException();
+		}
+
+		$value = (float) $value;
+		if ( $max - $min == 0 ) {
+			return 0;
+		} // Prevent division by zero
+
+		return max( 0, min( 10, ( $value - $min ) / ( $max - $min ) * 10 ) );
+	};
+
+	// Anonymous function for Code Quality and Integration Tests
+	$calculateCodeQualityScore = function ( $row ) use ( $normalize ) {
+		$codeStyle      = $row['Code Style Tests'] === 'Yes' ? 10 : 0;
+		$qitIntegration = count( explode( ',', $row['QIT Integration'] ) ) * 5;
+		$autoloader     = $row['Autoloader'] !== 'No' ? 10 : 0;
+		$testCoverage   = $normalize( $row['Tests to OOP LOC'] );
+
+
+		return $codeStyle
+		       + $qitIntegration
+		       + $autoloader
+		       + $testCoverage;
+	};
+
+	// Anonymous function for Code Size and Complexity
+	$calculateCodeSizeComplexityScore = function ( $row ) use ( $normalize ) {
+		$php_loc          = $normalize( $row['PHP LOC'], 0, 100000 );
+		$php_files        = $normalize( $row['PHP Files'], 0, 1000 );
+		$total_method_loc = $normalize( $row['Total Method LOC'], 0, 50000 );
+		$total_class_loc  = $normalize( $row['Total Class LOC'], 0, 50000 );
+		$oop_locs         = $normalize( $row['OOP LOCs'], 0, 50000 );
+
+		return $php_loc + $php_files + $total_method_loc + $total_class_loc + $oop_locs;
+	};
+
+	// Anonymous function for Code Structure and Organization
+	$calculateCodeStructureScore = function ( $row ) use ( $normalize ) {
+		$selfStatic                = $normalize( $row['self::/static::'], 0, 1000 );
+		$requireInclude            = $normalize( $row['Require/Include'], 0, 1000 );
+		$classInjections           = $normalize( $row['Class Injections'], 0, 1000 );
+		$staticPercentage          = max( 0, 100 - $normalize( $row['Static %'] ) );
+		$encapsulationPercentage   = max( 0, 100 - ( $normalize( $row['Encapsulated'] ) * 0.3 ) );
+		$averageMethodsPerClass    = $normalize( $row['Avg Methods per Classes'], 0, 20 );
+		$averageClassLoc           = $normalize( $row['Average Class LOC'], 0, 50 );
+		$totalCyclomaticComplexity = $normalize( $row['Total Cyclomatic Complexity'], 0, 1000 );
+
+		return $selfStatic
+		       + $requireInclude
+		       + $classInjections
+		       + $staticPercentage
+		       + $encapsulationPercentage;
+	};
+
+	// Anonymous function for Code Maintainability and Evolution
+	$calculateCodeEvolutionScore = function ( $row ) use ( $normalize ) {
+		$php_activity_compared_to_1st_year = $normalize( $row['PHP Avg Compared to 1st Year'] );
+		$change_concentration              = max( 0, 100 - $normalize( $row['Change Concentration'] ) );
+
+		return 0;
+	};
+
+	// Iterate through each row to calculate maintainability score
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$codeQualityScore        = $calculateCodeQualityScore( $row );
+		$codeSizeComplexityScore = $calculateCodeSizeComplexityScore( $row );
+		$codeStructureScore      = $calculateCodeStructureScore( $row );
+		$codeEvolutionScore      = $calculateCodeEvolutionScore( $row );
+
+		$row['Code Quality Score']         = $codeQualityScore;
+		$row['Code Size Complexity Score'] = $codeSizeComplexityScore;
+		$row['Code Structure Score']       = $codeStructureScore;
+		$row['Code Evolution Score']       = $codeEvolutionScore;
+
+		// Calculate the weighted average of all scores
+		$row['Maintainability Score'] = ( $codeQualityScore + $codeSizeComplexityScore +
+		                                  $codeStructureScore + $codeEvolutionScore ) / 4;
 	}
 }
 
@@ -298,7 +566,7 @@ function report_progress( $action ) {
 	$progress_message = "$action: $progress/$total [Processing $processing_slug]";
 
 	// Print the message with enough padding to clear the line
-	echo "\r" . $progress_message . str_repeat( ' ', max( 0, 80 - strlen( $progress_message ) ) );
+	echo "\r" . $progress_message . str_repeat( ' ', max( 0, 300 - strlen( $progress_message ) ) );
 	flush(); // Force the output to be written out
 }
 
@@ -817,14 +1085,23 @@ function evaluate_phpmd() {
 				'total_cyclomatic_complexity'        => 0,
 				'biggest_cyclomatic_complexity'      => 0,
 				'method_count_cyclomatic_complexity' => 0,
+				'total_npath_complexity'             => 0,
+				'biggest_npath_complexity'           => 0,
+				'method_count_npath_complexity'      => 0,
 				'total_public_methods'               => 0,
 				'total_protected_methods'            => 0,
 				'total_private_methods'              => 0,
 				'total_static_methods'               => 0,
+				'total_fields'                       => 0,
+				'total_parameters'                   => 0,
+				'biggest_parameters'                 => 0,
 			];
 		}
 
 		if ( ! $phpmd_cache_hit ) {
+			// Initialize an array to store individual NPath complexities
+			$phpmd_cache['npath_complexities'] = [];
+
 			$phpmd_command = "php -d memory_limit=24G " . __DIR__ . "/vendor/bin/phpmd $plugin_dir/** --suffixes php json --reportfile phpmd_output.json ruleset.xml --exclude **/tests/**,**/AI/data/**";
 			exec( $phpmd_command );
 			if ( file_exists( 'phpmd_output.json' ) ) {
@@ -904,6 +1181,26 @@ function evaluate_phpmd() {
 								$phpmd_cache['method_count_cyclomatic_complexity'] ++;
 							}
 						}
+						if ( $violation['rule'] == 'NPathComplexity' ) {
+							// Extract complexity value from the description
+							if ( preg_match( '/NPath complexity of (\d+)/', $violation['description'], $matches ) ) {
+								$complexity = (int) $matches[1];
+
+								// Append the complexity to the array
+								$phpmd_cache['npath_complexities'][] = $complexity;
+
+								// Update total cyclomatic complexity
+								$phpmd_cache['total_npath_complexity'] += $complexity;
+
+								// Update biggest cyclomatic complexity
+								if ( $complexity > $phpmd_cache['biggest_npath_complexity'] ) {
+									$phpmd_cache['biggest_npath_complexity'] = $complexity;
+								}
+
+								// Increment method count
+								$phpmd_cache['method_count_npath_complexity'] ++;
+							}
+						}
 						if ( $violation['rule'] == 'MethodVisibilityCount' ) {
 							// Extract visibility counts from the description
 							if ( preg_match( '/has (\d+) public methods, (\d+) protected methods, and (\d+) private methods/', $violation['description'], $matches ) ) {
@@ -927,10 +1224,45 @@ function evaluate_phpmd() {
 								$phpmd_cache['total_static_methods'] += $staticMethodsCount;
 							}
 						}
+						if ( $violation['rule'] == 'TooManyFields' ) {
+							// Extract the static method count from the description
+							if ( preg_match( '/has (\d+) fields/', $violation['description'], $matches ) ) {
+								$fieldsCount = (int) $matches[1];
+
+								// Update total static methods
+								$phpmd_cache['total_fields'] += $fieldsCount;
+							}
+						}
+						if ( $violation['rule'] == 'ExcessiveParameterList' ) {
+							// Extract the static method count from the description
+							if ( preg_match( '/has (\d+) parameters/', $violation['description'], $matches ) ) {
+								$parametersCount = (int) $matches[1];
+
+								// Update total static methods
+								$phpmd_cache['total_parameters']   += $parametersCount;
+								$phpmd_cache['biggest_parameters'] = max( $phpmd_cache['biggest_parameters'], $parametersCount );
+							}
+						}
 					}
 				}
 				unlink( 'phpmd_output.json' );
 			}
+
+			// Sort the data
+			sort( $phpmd_cache['npath_complexities'] );
+
+			// Calculate the index to trim the top 5% of the data
+			$trimIndex = ceil( 0.95 * count( $phpmd_cache['npath_complexities'] ) );
+
+			// Remove the top 5% of the data
+			$trimmedData = array_slice( $phpmd_cache['npath_complexities'], 0, $trimIndex );
+
+			// Calculate the average of the remaining 95% of the data
+			$trimmedMean = array_sum( $trimmedData ) / count( $trimmedData );
+
+			// Store the trimmed mean
+			$phpmd_cache['trimmed_mean_npath_complexity'] = $trimmedMean;
+
 			file_put_contents( $phpmd_cache_file, json_encode( $phpmd_cache ) );
 		}
 
@@ -995,6 +1327,40 @@ function evaluate_phpmd() {
 		$row['Total Cyclomatic Complexity']   = $phpmd_cache['total_cyclomatic_complexity'];
 		$row['Average Cyclomatic Complexity'] = number_format( $phpmd_cache['average_cyclomatic_complexity'], 2 );
 		$row['Biggest Cyclomatic Complexity'] = $phpmd_cache['biggest_cyclomatic_complexity'];
+
+		/*
+		 * NPath Complexity.
+		 *
+		// Assign PHPMD metrics to the respective row fields
+		$row['Total Npath Complexity']         = $phpmd_cache['total_npath_complexity'];
+		$row['95% Npath Complexity']           = intval( $phpmd_cache['trimmed_mean_npath_complexity'] );
+		$row['Biggest Npath Complexity']       = $phpmd_cache['biggest_npath_complexity'];
+		$row['Npath Complexity Methods Count'] = $phpmd_cache['method_count_npath_complexity'];
+		*/
+
+		/**
+		 * NPathComplexity
+		 * Average Parameters
+		 * Average Fields (State in Object)
+		 *
+		 * + with how often that is passed around (essentially represents global state-ish)
+		 */
+
+		/*
+		 * Total Fields.
+		 */
+		$row['Total Fields']          = $phpmd_cache['total_fields'];
+		$row['Avg. Fields per Class'] = $phpmd_cache['total_classes'] > 0
+			? number_format( $phpmd_cache['total_fields'] / $phpmd_cache['total_classes'], 2 )
+			: 0;
+
+		/*
+		 * Total Parameters.
+		 */
+		$row['Total Params']           = $phpmd_cache['total_parameters'];
+		$row['Avg. Params per Method'] = $total_methods > 0
+			? number_format( $phpmd_cache['total_parameters'] / $total_methods, 2 )
+			: 0;
 	}
 	unset( $row ); // Unset the reference to prevent potential issues later
 }
@@ -1213,7 +1579,7 @@ function evaluate_bus_factor() {
 function evaluate_php_activity_hercules() {
 	$languages = [
 		'php',
-		//'javascript'
+		'javascript'
 	];
 
 	foreach ( $languages as $lang ) {
@@ -1300,9 +1666,9 @@ function evaluate_php_activity_hercules() {
 				if ( isset( $row[ $column ] ) ) {
 					// Match the numerical data within the SPARKLINE structure
 					if ( preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $row[ $column ], $matches ) ) {
-						$graphNumbers  = explode( ',', $matches[1] );
+						$graphNumbers = explode( ',', $matches[1] );
 
-						$graphNumbers = array_map('intval', $graphNumbers);
+						$graphNumbers = array_map( 'intval', $graphNumbers );
 
 						// Mailpoet moved their development directory, so let's take that into account.
 						if ( $row['Slug'] === 'mailpoet' ) {
@@ -1318,11 +1684,11 @@ function evaluate_php_activity_hercules() {
 							$development_activity[ $row['Slug'] ] = [];
 						}
 
-						if ( str_contains( $column, 'Changed Lines per Month (99th percentile)' ) ) {
+						if ( str_contains( $column, 'Changed Lines per Month' ) ) {
 							$development_activity[ $row['Slug'] ]["{$lang}_changed_lines"] = $graphNumbers;
 						}
 
-						if ( str_contains( $column, 'New Lines per Month (99th percentile)' ) ) {
+						if ( str_contains( $column, 'New Lines per Month' ) ) {
 							$development_activity[ $row['Slug'] ]["{$lang}_new_lines"] = $graphNumbers;
 						}
 
@@ -1340,8 +1706,9 @@ function evaluate_php_activity_hercules() {
 						$new_col = sprintf( '(%s) %s', $lang, $column );
 						$new_val = '=SPARKLINE({' . $paddedGraph . '}' . $matches[2];
 
-						if ( str_contains( $new_col, '(php) Changed Lines per Month (99th percentile)' ) ) {
-							$new_val = str_replace( 'orange', 'green', $new_val );
+						if ( $lang === 'javascript' ) {
+							$new_val = str_replace( '007bff', 'ffc107', $new_val );
+							$new_val = str_replace( '5bc0de', 'f0ad4e', $new_val );
 						}
 
 						$row[ $new_col ] = $new_val;

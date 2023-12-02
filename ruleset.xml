@@ -18,11 +18,20 @@
         </properties>
     </rule>
 
+    <!-- Cyclomatic Complexity -->
+    <rule ref="rulesets/codesize.xml/NPathComplexity">
+        <priority>1</priority>
+        <properties>
+            <property name="minimum" value="0"/>
+            <property name="reportLevel" value="0"/>
+        </properties>
+    </rule>
+
     <!-- Excessive Class Length -->
     <rule ref="rulesets/codesize.xml/ExcessiveClassLength">
         <priority>1</priority>
         <properties>
-            <property name="minimum" value="1"/>
+            <property name="minimum" value="0"/>
             <property name="ignore-whitespace" value="false"/>
         </properties>
     </rule>
@@ -31,8 +40,22 @@
     <rule ref="rulesets/codesize.xml/ExcessiveMethodLength">
         <priority>1</priority>
         <properties>
-            <property name="minimum" value="1"/>
+            <property name="minimum" value="0"/>
             <property name="ignore-whitespace" value="false"/>
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/TooManyFields">
+        <priority>1</priority>
+        <properties>
+            <property name="maxfields" value="0"/>
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/ExcessiveParameterList">
+        <priority>1</priority>
+        <properties>
+            <property name="minimum" value="0"/>
         </properties>
     </rule>
 
