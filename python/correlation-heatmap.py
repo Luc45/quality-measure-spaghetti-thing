@@ -37,6 +37,7 @@ def process_and_generate_heatmap(file_path, identifier=''):
 
     data = pd.read_csv(file_path)
 
+    # Remove rows with missing values
     data = data.dropna()
 
     # Remove constant columns
@@ -137,7 +138,7 @@ def process_and_generate_heatmap(file_path, identifier=''):
             y1: y1,
             line: {
                 color: 'black',
-                width: 2
+                width: 1
             }
         };
 
@@ -162,7 +163,7 @@ def process_and_generate_heatmap(file_path, identifier=''):
             y1: y1,
             line: {
                 color: 'black',
-                width: 2
+                width: 1
             }
         };
 

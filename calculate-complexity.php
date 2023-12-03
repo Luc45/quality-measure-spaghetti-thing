@@ -39,7 +39,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 	}
 
 	#evaluate_complexity_score();
-	evaluate_maintenability_index();
+	summarize_size_and_complexity();
 
 	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman, bool $isSmall = false ) {
 		$expected      = $rows[ array_rand( $rows ) ];
@@ -82,42 +82,6 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		}
 		fclose( $fileHandle );
 	};
-
-	/*
-	foreach ( $GLOBALS['csvData'] as &$row ) {
-		foreach ( $row as $k => $v ) {
-			if ( preg_match( '/^\((php|javascript)\)\s(New Lines per Month|Changed Lines per Month)$/i', $k, $matches ) ) {
-				$lang = $matches[1];
-
-				if ( $lang === 'javascript' ) {
-					continue;
-				}
-
-				$locs_per_month = array_map( 'intval', explode( ',', $v ) );
-
-				// Split the LOCs per month into 12-month chunks
-				$years = array_chunk( $locs_per_month, 12 );
-
-				// Calculate the total of the first 12-month period
-				$firstYearTotal = isset( $years[0] ) ? array_sum( $years[0] ) : 0;
-
-				// Calculate percentages for each 12-month period
-				$yearlyActivityPercentages = [];
-				foreach ( $years as $yearNumber => $year ) {
-					$yearTotal  = array_sum( $year );
-					$percentage = $firstYearTotal ? ( $yearTotal / $firstYearTotal * 100 ) : 0;
-					// Format the number without thousands separator
-					$yearlyActivityPercentages[ "Year " . ( $yearNumber + 1 ) ] = number_format( $percentage, 2, '.', '' );
-				}
-
-				// Store or use $yearlyActivityPercentages as needed
-				foreach ( $yearlyActivityPercentages as $yearKey => $yearValue ) {
-					$row[ $lang . ' ' . $yearKey . ' Activity' ] = $yearValue;
-				}
-			}
-		}
-	}
-	*/
 
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as $k => &$row ) {
@@ -219,9 +183,6 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		// 'Tests to OOP LOC',
 		'Code Style Tests',
 		'QIT Integration',
-
-		# Codebase Maintanability
-		'Maintainability Score',
 
 		# Codebase Structure
 		'Autoloader',
@@ -442,127 +403,6 @@ add_aggregated_rating();
 evaluate_bus_factor();
 evaluate_change_concentration();
 evaluate_php_activity_hercules();
-
-/**
- * # Tests
- * 'Unit Tests to OOP LOC',
- * 'E2E Tests to OOP LOC',
- * 'Code Style Tests',
- * 'QIT Integration',
- *
- * # Codebase Structure
- * 'Autoloader',
- * 'OOP LOCs %',
- * 'Static %',
- * 'Encapsulated %',
- *
- * # Codebase Averages
- * 'Average Class LOC',
- * 'Average Method LOC',
- * 'Avg Methods per Classes',
- * 'Avg. Fields per Class',
- * 'Avg. Params per Method',
- * 'Average Cyclomatic Complexity',
- *
- * # Codebase Size
- * 'Total Class LOC',
- * 'Total Method LOC',
- * 'Total Cyclomatic Complexity',
- * 'Total Fields',
- * 'Total Params',
- * 'PHP LOC',
- * 'PHP Files',
- * 'self::/static::',
- * 'Require/Include',
- * 'Class Injections',
- */
-function evaluate_maintenability_index() {
-	// Iterate through each row to calculate maintainability score
-	foreach ( $GLOBALS['csvData'] as &$row ) {
-		$calculate_codebase_size = static function ( &$row ): int {
-			$size_metrics = [
-				'Total Class LOC',
-				'Total Method LOC',
-				'Total Cyclomatic Complexity',
-				'Total Fields',
-				'Total Params',
-				'PHP LOC',
-				'PHP Files',
-				'self::/static::',
-				'Require/Include',
-				'Class Injections',
-			];
-
-			$size_total = 0;
-
-			foreach ( $size_metrics as $m ) {
-				$size_total += $row[ $m ];
-			}
-
-			return $size_total;
-		};
-
-		$calculate_complexity = static function ( &$row ) {
-			$complexity_metrics = [
-				'Average Class LOC',
-				'Average Method LOC',
-				'Avg Methods per Classes',
-				'Avg. Fields per Class',
-				'Avg. Params per Method',
-				'Average Cyclomatic Complexity',
-			];
-
-			$complexity_total = 0;
-
-			foreach ( $complexity_metrics as $m ) {
-				$complexity_total += $row[ $m ];
-			}
-
-			return $complexity_total;
-		};
-
-		$calculate_maintainability = static function ( &$row ) {
-			// Normalize metrics
-			$normalized_codebase_size = ($row['Codebase Size'] - 1000) / (300000 - 1000);
-			$normalized_codebase_complexity = ($row['Codebase Complexity'] - 100) / (1000 - 100);
-
-			// Normalize percentage metrics
-			$unit_tests_to_oop_loc = rtrim($row['Unit Tests to OOP LOC'], '%') / 100;
-			$e2e_tests_to_oop_loc = rtrim($row['E2E Tests to OOP LOC'], '%') / 100;
-			$static = rtrim($row['Static %'], '%') / 100;
-			$encapsulated = rtrim($row['Encapsulated %'], '%') / 100;
-
-			// Autoloader (1 if Yes, 0 if No)
-			$autoloader = $row['Autoloader'] !== 'No' ? 1 : 0;
-
-			// Assign weights
-			$weights = [
-				'unit_tests' => 0.15,
-				'e2e_tests' => 0.15,
-				'size' => -0.1,
-				'complexity' => -0.2,
-				'autoloader' => 0.1,
-				'static' => 0.1,
-				'encapsulated' => 0.1
-			];
-
-			// Calculate maintainability score
-			$maintainability = ($unit_tests_to_oop_loc * $weights['unit_tests']) +
-			                   ($e2e_tests_to_oop_loc * $weights['e2e_tests']) +
-			                   ($normalized_codebase_size * $weights['size']) +
-			                   ($normalized_codebase_complexity * $weights['complexity']) +
-			                   ($autoloader * $weights['autoloader']) +
-			                   ($static * $weights['static']) +
-			                   ($encapsulated * $weights['encapsulated']);
-
-			return $maintainability;
-		};
-
-		$row['Codebase Size']         = $calculate_codebase_size( $row );
-		$row['Codebase Complexity']   = $calculate_complexity( $row );
-		$row['Maintainability Score'] = $calculate_maintainability( $row );
-	}
-}
 
 function load_csv() {
 	$csvFile = __DIR__ . '/input.csv';
@@ -2051,5 +1891,55 @@ function evaluate_change_concentration() {
 
 		$row['Top Changed PHP Files'] = trim( $most_changed_files );
 		$row['Change Concentration']  = number_format( $hhi * 100, 2 ) . '%';
+	}
+}
+
+function summarize_size_and_complexity() {
+	// Iterate through each row to calculate maintainability score
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		$calculate_codebase_size = static function ( &$row ): int {
+			$size_metrics = [
+				'Total Class LOC',
+				'Total Method LOC',
+				'Total Cyclomatic Complexity',
+				'Total Fields',
+				'Total Params',
+				'PHP LOC',
+				'PHP Files',
+				'self::/static::',
+				'Require/Include',
+				'Class Injections',
+			];
+
+			$size_total = 0;
+
+			foreach ( $size_metrics as $m ) {
+				$size_total += $row[ $m ];
+			}
+
+			return $size_total;
+		};
+
+		$calculate_complexity = static function ( &$row ) {
+			$complexity_metrics = [
+				'Average Class LOC',
+				'Average Method LOC',
+				'Avg Methods per Classes',
+				'Avg. Fields per Class',
+				'Avg. Params per Method',
+				'Average Cyclomatic Complexity',
+			];
+
+			$complexity_total = 0;
+
+			foreach ( $complexity_metrics as $m ) {
+				$complexity_total += $row[ $m ];
+			}
+
+			return $complexity_total;
+		};
+
+		$row['Codebase Size']         = $calculate_codebase_size( $row );
+		$row['Codebase Complexity']   = $calculate_complexity( $row );
 	}
 }
