@@ -39,7 +39,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 	}
 
 	#evaluate_complexity_score();
-	#evaluate_maintenability_score();
+	evaluate_maintenability_index();
 
 	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman, bool $isSmall = false ) {
 		$expected      = $rows[ array_rand( $rows ) ];
@@ -185,6 +185,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			$row['HerculesWhitelist'],
 			$row['Longest Method LOC'],
 			$row['Longest Class LOC'],
+			$row['Biggest Cyclomatic Complexity'],
 		);
 	}
 
@@ -215,25 +216,33 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		'E2E Tests to PHP LOC',
 		'E2E Tests to OOP LOC',
 		'Tests to PHP LOC',
-		'Tests to OOP LOC',
+		// 'Tests to OOP LOC',
 		'Code Style Tests',
 		'QIT Integration',
 
+		# Codebase Maintanability
+		'Maintainability Score',
+
 		# Codebase Structure
 		'Autoloader',
+		'OOP LOCs %',
+		'Static %',
+		'Encapsulated %',
 
 		# Codebase Averages
+		'Codebase Complexity',
+		/*
 		'Average Class LOC',
 		'Average Method LOC',
 		'Avg Methods per Classes',
 		'Avg. Fields per Class',
 		'Avg. Params per Method',
 		'Average Cyclomatic Complexity',
-		'OOP LOCs',
-		'Static %',
-		'Encapsulated',
+		*/
 
 		# Codebase Size
+		'Codebase Size',
+		/*
 		'Total Class LOC',
 		'Total Method LOC',
 		'Total Cyclomatic Complexity',
@@ -244,7 +253,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		'self::/static::',
 		'Require/Include',
 		'Class Injections',
-		'Biggest Cyclomatic Complexity',
+		*/
 
 		# Development Activity
 		'BusFactor',
@@ -389,9 +398,16 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			$g['Unit Tests to PHP LOC'], // Redundant with Unit Tests to OOP LOC
 			$g['E2E Tests to PHP LOC'], // Redundant with E2E Tests to OOP LOC
 			$g['Playwright Tests'], // Redundant with Playwright LOC
+			$g['Puppeteer E2E Tests'],
 			$g['wp-browser E2E Tests'], // Redundant with wp-browser E2E LOC
 			$g['wp-browser Unit Tests'], // Redundant with wp-browser Unit LOC
 			$g['PHPUnit Tests'], // Redundant with PHPUnit LOC
+			// We will use E2E Tests to OOP LOC instead
+			$g['Playwright LOC'],
+			$g['wp-browser E2E LOC'],
+			$g['Puppeteer E2E LOC'],
+			$g['wp-browser Unit LOC'],
+			$g['PHPUnit LOC'],
 		);
 	}
 
@@ -404,6 +420,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		'sensei',
 		'wordpress-seo',
 		'automatewoo',
+		#'woocommerce-payments',
 	];
 
 	$withoutBiggestExtensions = array_diff_key( $programmaticCsv, array_flip( $biggestExtensions ) );
@@ -426,164 +443,124 @@ evaluate_bus_factor();
 evaluate_change_concentration();
 evaluate_php_activity_hercules();
 
-function evaluate_complexity_score() {
-	/**
-	 * Available array keys in $row for calculating complexity factor:
-	 * Extension    Aggregated Rating    WPORG Rating    WOOCOM Rating    WPORG Rating Count    WOOCOM Rating Count    WPORG Installations    Playwright Tests    Playwright LOC    wp-browser E2E Tests    wp-browser E2E LOC    Puppeteer E2E Tests    Puppeteer E2E LOC    wp-browser Unit Tests    wp-browser Unit LOC    PHPUnit Tests    PHPUnit LOC    Code Style Tests    QIT Integration    Autoloader    WPORG Supp    Resolved    PHP LOC    PHP Files    Static %    Encapsulated    self::/static::    Require/Include    Class Injections    Avg Methods per Classes    Total Method LOC    Average Method LOC    Longest Method LOC    Total Class LOC    Average Class LOC    Longest Class LOC    OOP LOCs    Total Cyclomatic Complexity    Average Cyclomatic Complexity    Biggest Cyclomatic Complexity    Unit Tests to PHP LOC    Unit Tests to OOP LOC    E2E Tests to PHP LOC    E2E Tests to OOP LOC    Tests to PHP LOC    Tests to OOP LOC    BusFactor    Top Changed PHP Files    Change Concentration    (php) Changed Lines per Month (99th percentile)                                                        (php) Changed Lines per Month (Capped at 2500)
-	 */
-	// Initialize variables for dynamic baselines and ceilings
-	$minTotal   = PHP_INT_MAX;
-	$maxTotal   = PHP_INT_MIN;
-	$minAverage = PHP_INT_MAX;
-	$maxAverage = PHP_INT_MIN;
-
-	// First iteration to find min and max values
-	foreach ( $GLOBALS['csvData'] as $row ) {
-		$minTotal   = min( $minTotal, $row['Total Cyclomatic Complexity'] );
-		$maxTotal   = max( $maxTotal, $row['Total Cyclomatic Complexity'] );
-		$minAverage = min( $minAverage, $row['Average Cyclomatic Complexity'] );
-		$maxAverage = max( $maxAverage, $row['Average Cyclomatic Complexity'] );
-	}
-
-	// Define a minimal base score
-	$baseScore = 0.1;  // Adjust this value as needed
-
-	// Second iteration to calculate complexity scores
-	foreach ( $GLOBALS['csvData'] as &$row ) {
-		if ( isset( $row['Total Cyclomatic Complexity'], $row['Average Cyclomatic Complexity'] ) &&
-		     is_numeric( $row['Total Cyclomatic Complexity'] ) &&
-		     is_numeric( $row['Average Cyclomatic Complexity'] ) ) {
-
-			// Normalize the complexity values within the dynamically determined ranges
-			$normalizedTotal   = max( 0, min( 100, ( $row['Total Cyclomatic Complexity'] - $minTotal ) / ( $maxTotal - $minTotal ) * 100 ) );
-			$normalizedAverage = max( 0, min( 100, ( $row['Average Cyclomatic Complexity'] - $minAverage ) / ( $maxAverage - $minAverage ) * 100 ) );
-
-			// Calculate the weighted average of the normalized complexities
-			$row['Complexity Score'] = max( $baseScore, ( $normalizedTotal * 0.4 + $normalizedAverage * 0.6 ) );
-		} else {
-			$row['Complexity Score'] = $baseScore;  // Assign base score if data is missing or not numeric
-		}
-	}
-}
-
 /**
- * - Code Quality and Integration Tests:
- * Code Style Tests (Yes/No)
- * QIT Integration (api, e2e, activation, phpstan, phpcompatibility, security)
- * Autoloader (Composer/\d spl_autoload_register/No)
+ * # Tests
+ * 'Unit Tests to OOP LOC',
+ * 'E2E Tests to OOP LOC',
+ * 'Code Style Tests',
+ * 'QIT Integration',
  *
- * - Code Size and Complexity:
- * PHP LOC (Int of PHP LOC)
- * PHP Files (Int of PHP Files)
- * Total Method LOC (Int of total method LOC)
- * Total Class LOC (Int of total class LOC)
- * OOP LOCs (Int of OOP LOCs)
- * Total Cyclomatic Complexity (Int of total cyclomatic complexity)
+ * # Codebase Structure
+ * 'Autoloader',
+ * 'OOP LOCs %',
+ * 'Static %',
+ * 'Encapsulated %',
  *
- * - Code Structure and Organization:
- * self::/static:: (Int of self::/static::)
- * Require/Include (Int of require/include)
- * Class Injections (Int of class injections)
+ * # Codebase Averages
+ * 'Average Class LOC',
+ * 'Average Method LOC',
+ * 'Avg Methods per Classes',
+ * 'Avg. Fields per Class',
+ * 'Avg. Params per Method',
+ * 'Average Cyclomatic Complexity',
  *
- * - Code Maintainability and Evolution:
- * Encapsulated (Percentage of encapsulated OOP methods)
- * Static % (Percentage of static methods)
- * Avg Methods per Classes (Float of avg methods per class)
- * Average Method LOC (Float of average method LOC)
- * Average Class LOC (Float of average class LOC)
- * Average Cyclomatic Complexity (Float of average cyclomatic complexity)
- * Change Concentration (Percentage of change concentration)
- * PHP Avg Compared to 1st Year (Float of PHP LOC compared to 1st year)
- * Tests to OOP LOC (Percentage of tests to OOP LOC)
+ * # Codebase Size
+ * 'Total Class LOC',
+ * 'Total Method LOC',
+ * 'Total Cyclomatic Complexity',
+ * 'Total Fields',
+ * 'Total Params',
+ * 'PHP LOC',
+ * 'PHP Files',
+ * 'self::/static::',
+ * 'Require/Include',
+ * 'Class Injections',
  */
-function evaluate_maintenability_score() {
-	// Inline function for normalization
-	$normalize = function ( $value, $min = null, $max = null ) {
-		// Remove percentage sign and convert to float if necessary
-		if ( str_contains( $value, '%' ) ) {
-			$value = rtrim( $value, '%' );
-
-			return $value;
-		}
-
-		if ( is_null( $min ) || is_null( $max ) ) {
-			throw new \LogicException();
-		}
-
-		$value = (float) $value;
-		if ( $max - $min == 0 ) {
-			return 0;
-		} // Prevent division by zero
-
-		return max( 0, min( 10, ( $value - $min ) / ( $max - $min ) * 10 ) );
-	};
-
-	// Anonymous function for Code Quality and Integration Tests
-	$calculateCodeQualityScore = function ( $row ) use ( $normalize ) {
-		$codeStyle      = $row['Code Style Tests'] === 'Yes' ? 10 : 0;
-		$qitIntegration = count( explode( ',', $row['QIT Integration'] ) ) * 5;
-		$autoloader     = $row['Autoloader'] !== 'No' ? 10 : 0;
-		$testCoverage   = $normalize( $row['Tests to OOP LOC'] );
-
-
-		return $codeStyle
-		       + $qitIntegration
-		       + $autoloader
-		       + $testCoverage;
-	};
-
-	// Anonymous function for Code Size and Complexity
-	$calculateCodeSizeComplexityScore = function ( $row ) use ( $normalize ) {
-		$php_loc          = $normalize( $row['PHP LOC'], 0, 100000 );
-		$php_files        = $normalize( $row['PHP Files'], 0, 1000 );
-		$total_method_loc = $normalize( $row['Total Method LOC'], 0, 50000 );
-		$total_class_loc  = $normalize( $row['Total Class LOC'], 0, 50000 );
-		$oop_locs         = $normalize( $row['OOP LOCs'], 0, 50000 );
-
-		return $php_loc + $php_files + $total_method_loc + $total_class_loc + $oop_locs;
-	};
-
-	// Anonymous function for Code Structure and Organization
-	$calculateCodeStructureScore = function ( $row ) use ( $normalize ) {
-		$selfStatic                = $normalize( $row['self::/static::'], 0, 1000 );
-		$requireInclude            = $normalize( $row['Require/Include'], 0, 1000 );
-		$classInjections           = $normalize( $row['Class Injections'], 0, 1000 );
-		$staticPercentage          = max( 0, 100 - $normalize( $row['Static %'] ) );
-		$encapsulationPercentage   = max( 0, 100 - ( $normalize( $row['Encapsulated'] ) * 0.3 ) );
-		$averageMethodsPerClass    = $normalize( $row['Avg Methods per Classes'], 0, 20 );
-		$averageClassLoc           = $normalize( $row['Average Class LOC'], 0, 50 );
-		$totalCyclomaticComplexity = $normalize( $row['Total Cyclomatic Complexity'], 0, 1000 );
-
-		return $selfStatic
-		       + $requireInclude
-		       + $classInjections
-		       + $staticPercentage
-		       + $encapsulationPercentage;
-	};
-
-	// Anonymous function for Code Maintainability and Evolution
-	$calculateCodeEvolutionScore = function ( $row ) use ( $normalize ) {
-		$php_activity_compared_to_1st_year = $normalize( $row['PHP Avg Compared to 1st Year'] );
-		$change_concentration              = max( 0, 100 - $normalize( $row['Change Concentration'] ) );
-
-		return 0;
-	};
-
+function evaluate_maintenability_index() {
 	// Iterate through each row to calculate maintainability score
 	foreach ( $GLOBALS['csvData'] as &$row ) {
-		$codeQualityScore        = $calculateCodeQualityScore( $row );
-		$codeSizeComplexityScore = $calculateCodeSizeComplexityScore( $row );
-		$codeStructureScore      = $calculateCodeStructureScore( $row );
-		$codeEvolutionScore      = $calculateCodeEvolutionScore( $row );
+		$calculate_codebase_size = static function ( &$row ): int {
+			$size_metrics = [
+				'Total Class LOC',
+				'Total Method LOC',
+				'Total Cyclomatic Complexity',
+				'Total Fields',
+				'Total Params',
+				'PHP LOC',
+				'PHP Files',
+				'self::/static::',
+				'Require/Include',
+				'Class Injections',
+			];
 
-		$row['Code Quality Score']         = $codeQualityScore;
-		$row['Code Size Complexity Score'] = $codeSizeComplexityScore;
-		$row['Code Structure Score']       = $codeStructureScore;
-		$row['Code Evolution Score']       = $codeEvolutionScore;
+			$size_total = 0;
 
-		// Calculate the weighted average of all scores
-		$row['Maintainability Score'] = ( $codeQualityScore + $codeSizeComplexityScore +
-		                                  $codeStructureScore + $codeEvolutionScore ) / 4;
+			foreach ( $size_metrics as $m ) {
+				$size_total += $row[ $m ];
+			}
+
+			return $size_total;
+		};
+
+		$calculate_complexity = static function ( &$row ) {
+			$complexity_metrics = [
+				'Average Class LOC',
+				'Average Method LOC',
+				'Avg Methods per Classes',
+				'Avg. Fields per Class',
+				'Avg. Params per Method',
+				'Average Cyclomatic Complexity',
+			];
+
+			$complexity_total = 0;
+
+			foreach ( $complexity_metrics as $m ) {
+				$complexity_total += $row[ $m ];
+			}
+
+			return $complexity_total;
+		};
+
+		$calculate_maintainability = static function ( &$row ) {
+			// Normalize metrics
+			$normalized_codebase_size = ($row['Codebase Size'] - 1000) / (300000 - 1000);
+			$normalized_codebase_complexity = ($row['Codebase Complexity'] - 100) / (1000 - 100);
+
+			// Normalize percentage metrics
+			$unit_tests_to_oop_loc = rtrim($row['Unit Tests to OOP LOC'], '%') / 100;
+			$e2e_tests_to_oop_loc = rtrim($row['E2E Tests to OOP LOC'], '%') / 100;
+			$static = rtrim($row['Static %'], '%') / 100;
+			$encapsulated = rtrim($row['Encapsulated %'], '%') / 100;
+
+			// Autoloader (1 if Yes, 0 if No)
+			$autoloader = $row['Autoloader'] !== 'No' ? 1 : 0;
+
+			// Assign weights
+			$weights = [
+				'unit_tests' => 0.15,
+				'e2e_tests' => 0.15,
+				'size' => -0.1,
+				'complexity' => -0.2,
+				'autoloader' => 0.1,
+				'static' => 0.1,
+				'encapsulated' => 0.1
+			];
+
+			// Calculate maintainability score
+			$maintainability = ($unit_tests_to_oop_loc * $weights['unit_tests']) +
+			                   ($e2e_tests_to_oop_loc * $weights['e2e_tests']) +
+			                   ($normalized_codebase_size * $weights['size']) +
+			                   ($normalized_codebase_complexity * $weights['complexity']) +
+			                   ($autoloader * $weights['autoloader']) +
+			                   ($static * $weights['static']) +
+			                   ($encapsulated * $weights['encapsulated']);
+
+			return $maintainability;
+		};
+
+		$row['Codebase Size']         = $calculate_codebase_size( $row );
+		$row['Codebase Complexity']   = $calculate_complexity( $row );
+		$row['Maintainability Score'] = $calculate_maintainability( $row );
 	}
 }
 
@@ -1454,7 +1431,7 @@ function evaluate_phpmd() {
 		$row['Protected/Private Functions'] = $encapsulated_methods;
 
 		// Calculate the encapsulation percentage (public vs non-public)
-		$row['Encapsulated'] = intval( $total_methods > 0 ? ( $encapsulated_methods / $total_methods ) * 100 : 0 ) . '%';
+		$row['Encapsulated %'] = intval( $total_methods > 0 ? ( $encapsulated_methods / $total_methods ) * 100 : 0 ) . '%';
 
 		/*
 		 * Static Methods
@@ -1490,7 +1467,7 @@ function evaluate_phpmd() {
 		$row['Longest Class LOC'] = $phpmd_cache['longest_class_length'];
 
 		// Calculate OOP percentage from $phpmd_cache['total_class_length'] and $row['PHP LOC']
-		$row['OOP LOCs'] = $row['PHP LOC'] > 0
+		$row['OOP LOCs %'] = $row['PHP LOC'] > 0
 			? number_format( $phpmd_cache['total_class_length'] / $row['PHP LOC'] * 100, 2 ) . '%'
 			: 0;
 
