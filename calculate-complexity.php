@@ -82,48 +82,35 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			if ( preg_match( '/^\((php|javascript)\)\s(New Lines per Month|Changed Lines per Month)$/i', $k, $matches ) ) {
 				$lang = $matches[1];
 
+				if ( $lang === 'javascript' ) {
+					continue;
+				}
+
 				$locs_per_month = array_map( 'intval', explode( ',', $v ) );
 
-				$total_locs = array_sum( $locs_per_month );
+				// Split the LOCs per month into 12-month chunks
+				$years = array_chunk( $locs_per_month, 12 );
 
-				$years = ceil( count( $locs_per_month ) / 12 ); // Calculate the number of years
+				// Calculate the total of the first 12-month period
+				$firstYearTotal = isset( $years[0] ) ? array_sum( $years[0] ) : 0;
 
-				$absolute_locs = [];
-				$percent_locs  = [];
-
-				for ( $year = 1; $year <= $years; $year ++ ) {
-					$yearly_sum = 0;
-					for ( $month = 0; $month < 12; $month ++ ) {
-						$index = ( $year - 1 ) * 12 + $month;
-
-						// This is needed for the last year, which might not have 12 months.
-						if ( $index >= count( $locs_per_month ) ) {
-							continue;
-						}
-
-						$yearly_sum += (int) $locs_per_month[ $index ];
-					}
-					$absolute_locs["LOCs on Year $year"] = $yearly_sum;
-
-					if ( $yearly_sum > 0 ) {
-						$percent_locs["Percent LOCs on Year $year"] = number_format( ( $yearly_sum / $total_locs ) * 100, 2 );
-					} else {
-						$percent_locs["Percent LOCs on Year $year"] = 0;
-					}
+				// Calculate percentages for each 12-month period
+				$yearlyActivityPercentages = [];
+				foreach ( $years as $yearNumber => $year ) {
+					$yearTotal  = array_sum( $year );
+					$percentage = $firstYearTotal ? ( $yearTotal / $firstYearTotal * 100 ) : 0;
+					// Format the number without thousands separator
+					$yearlyActivityPercentages[ "Year " . ( $yearNumber + 1 ) ] = number_format( $percentage, 2, '.', '' );
 				}
 
-				/* // We don't deal in absolutes.
-				foreach ( $absolute_locs as $k1 => $v1 ) {
-					$row[ $lang . ' ' . $k1 ] = $v1;
-				}
-				*/
-
-				foreach ( $percent_locs as $k2 => $v2 ) {
-					$row[ $lang . ' ' . $k2 ] = $v2;
+				// Store or use $yearlyActivityPercentages as needed
+				foreach ( $yearlyActivityPercentages as $yearKey => $yearValue ) {
+					$row[ $lang . ' ' . $yearKey . ' Activity' ] = $yearValue;
 				}
 			}
 		}
 	}
+
 
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
@@ -1872,6 +1859,14 @@ function evaluate_php_activity_hercules() {
 				// Realign the array starting from the first non-zero month
 				$realignedCounts = array_slice( $lineCountsInt, $startMonth );
 
+				// Calculate the total for the first half and second half
+				$half            = ceil( count( $realignedCounts ) / 2 );
+				$firstHalfTotal  = array_sum( array_slice( $realignedCounts, 0, $half ) );
+				$secondHalfTotal = array_sum( array_slice( $realignedCounts, $half ) );
+
+				// Compare the second half with the first half
+				$halfComparison = $firstHalfTotal ? ( $secondHalfTotal / $firstHalfTotal * 100 ) : 0;
+
 				// Split the realigned array into chunks of 12 (each representing a year)
 				$years = array_chunk( $realignedCounts, 12 );
 
@@ -1901,8 +1896,9 @@ function evaluate_php_activity_hercules() {
 				}
 
 				// Store or use $yearlyActivityPercentages as needed
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]       = implode( ", ", $yearlyActivityPercentages );
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Avg Compared to 1st Year' ] = "$average%";
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]                     = implode( ", ", $yearlyActivityPercentages );
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Avg Compared to 1st Year' ]               = "$average%";
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity 2nd Half Compared to 1st Half' ] = intval( $halfComparison ) . '%';
 			}
 		}
 	}
