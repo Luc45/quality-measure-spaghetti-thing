@@ -17,30 +17,36 @@ $GLOBALS['parallel_repos']     = explode( ',', $parallel_repos );
 
 register_shutdown_function( static function () use ( $parallel_index ) {
 	// Save the data to a CSV File.
-	$humanCsvFile   = __DIR__ . "/human-$parallel_index.csv";
-	$machineCsvFile = __DIR__ . "/machine-$parallel_index.csv";
+	$humanCsvFile        = __DIR__ . "/human-$parallel_index.csv";
+	$machineCsvFile      = __DIR__ . "/machine-$parallel_index.csv";
+	$machineCsvFileSmall = __DIR__ . "/machine-small-$parallel_index.csv";
 
-	$fileHandle    = fopen( $humanCsvFile, 'w' );
-	$fileHandleGpt = fopen( $machineCsvFile, 'w' );
+	$fileHandle                  = fopen( $humanCsvFile, 'w' );
+	$fileHandleProgrammatic      = fopen( $machineCsvFile, 'w' );
+	$fileHandleProgrammaticSmall = fopen( $machineCsvFileSmall, 'w' );
 
 	// Check if the file was opened successfully.
 	if ( $fileHandle === false ) {
 		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $humanCsvFile ) );
 	}
 
-	if ( $fileHandleGpt === false ) {
-		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleGpt ) );
+	if ( $fileHandleProgrammatic === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleProgrammatic ) );
+	}
+
+	if ( $fileHandleProgrammaticSmall === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleProgrammaticSmall ) );
 	}
 
 	#evaluate_complexity_score();
 	#evaluate_maintenability_score();
 
-	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman ) {
+	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman, bool $isSmall = false ) {
 		$expected      = $rows[ array_rand( $rows ) ];
 		$expectedCount = count( $expected );
 
 		// Determine the correct headers file based on the flag
-		$headersFile       = $isHuman ? __DIR__ . "/human-headers.csv" : __DIR__ . "/machine-headers.csv";
+		$headersFile       = $isHuman ? __DIR__ . "/human-headers.csv" : ( $isSmall ? __DIR__ . "/machine-small-headers.csv" : __DIR__ . "/machine-headers.csv" );
 		$headersFileHandle = fopen( $headersFile, 'w' );
 
 		// Check if the headers file was opened successfully
@@ -77,6 +83,7 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		fclose( $fileHandle );
 	};
 
+	/*
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		foreach ( $row as $k => $v ) {
 			if ( preg_match( '/^\((php|javascript)\)\s(New Lines per Month|Changed Lines per Month)$/i', $k, $matches ) ) {
@@ -110,10 +117,17 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			}
 		}
 	}
-
+	*/
 
 	// Remove rows that do not need to be in the output CSV.
-	foreach ( $GLOBALS['csvData'] as &$row ) {
+	foreach ( $GLOBALS['csvData'] as $k => &$row ) {
+		// Trim all row keys.
+		$row = array_combine( array_map( 'trim', array_keys( $row ) ), $row );
+
+		// Replace "﻿Extension" with "Extension".
+		$row['Extension'] = $row['﻿Extension'];
+		unset( $row['﻿Extension'] );
+
 		unset(
 			$row['PluginDir'],
 			$row['RepoDir'],
@@ -169,36 +183,103 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			$row['JS Activity Over Time'],
 			$row['RelativePluginDir'],
 			$row['HerculesWhitelist'],
+			$row['Longest Method LOC'],
+			$row['Longest Class LOC'],
 		);
 	}
 
-	$humanCsv = [];
+	$order = [
+		'Extension',
+		'Aggregated Rating',
+		'WPORG Rating',
+		'WOOCOM Rating',
+		'WPORG Rating Count',
+		'WOOCOM Rating Count',
+		'WPORG Installations',
+		'WPORG Supp',
+		'Resolved',
 
-	// Set the order of some columns.
+		# Tests
+		'Playwright Tests',
+		'Playwright LOC',
+		'wp-browser E2E Tests',
+		'wp-browser E2E LOC',
+		'Puppeteer E2E Tests',
+		'Puppeteer E2E LOC',
+		'wp-browser Unit Tests',
+		'wp-browser Unit LOC',
+		'PHPUnit Tests',
+		'PHPUnit LOC',
+		'Unit Tests to PHP LOC',
+		'Unit Tests to OOP LOC',
+		'E2E Tests to PHP LOC',
+		'E2E Tests to OOP LOC',
+		'Tests to PHP LOC',
+		'Tests to OOP LOC',
+		'Code Style Tests',
+		'QIT Integration',
+
+		# Codebase Structure
+		'Autoloader',
+
+		# Codebase Averages
+		'Average Class LOC',
+		'Average Method LOC',
+		'Avg Methods per Classes',
+		'Avg. Fields per Class',
+		'Avg. Params per Method',
+		'Average Cyclomatic Complexity',
+		'OOP LOCs',
+		'Static %',
+		'Encapsulated',
+
+		# Codebase Size
+		'Total Class LOC',
+		'Total Method LOC',
+		'Total Cyclomatic Complexity',
+		'Total Fields',
+		'Total Params',
+		'PHP LOC',
+		'PHP Files',
+		'self::/static::',
+		'Require/Include',
+		'Class Injections',
+		'Biggest Cyclomatic Complexity',
+
+		# Development Activity
+		'BusFactor',
+		'Top Changed PHP Files',
+		'Change Concentration',
+		'(php) New Lines per Month (Capped at 1000)',
+		'(php) Changed Lines per Month (Capped at 1000)',
+		'PHP Activity Up To 49%',
+		'PHP Activity Up To 98%',
+		'PHP Activity Up To 147%',
+		'PHP Avg Compared to 1st Year',
+		'(javascript) New Lines per Month (Capped at 1000)',
+		'(javascript) Changed Lines per Month (Capped at 1000)',
+		'JS Avg Compared to 1st Year',
+	];
+
+	$humanCsv        = [];
+	$programmaticCsv = [];
+
 	foreach ( $GLOBALS['csvData'] as $key => &$row ) {
-		$humanCsv[ $key ]                      = [];
-		$humanCsv[ $key ]['Extension']         = $row['﻿Extension'];
-		$humanCsv[ $key ]['Aggregated Rating'] = $row['Aggregated Rating'];
+		$organizedRow = []; // Initialize an empty array for the organized row
 
-		unset(
-			$row['﻿Extension'],
-			$row['Aggregated Rating']
-		);
-		$humanCsv[ $key ] = array_merge( $humanCsv[ $key ], $row );
-	}
-
-	/*
-	 * Generate a CSV file that is friendly to programmatic interactions.
-	 */
-	$programmaticCsv = $humanCsv;
-
-	// After we did all the operations, let's do some final operations that are specific to human CSV.
-	foreach ( $humanCsv as $key => &$row ) {
-		foreach ( $row as $k => $v ) {
-			if ( str_contains( $v, 'SPARKLINE' ) ) {
-				unset( $row[ $k ] );
+		foreach ( $order as $columnName ) {
+			// Check if the column name exists in the row
+			if ( array_key_exists( $columnName, $row ) ) {
+				// Add the column to the organized row
+				$organizedRow[ $columnName ] = $row[ $columnName ];
+			} else {
+				throw new \LogicException( "Missing column $columnName in row $key" );
 			}
 		}
+
+		// Replace the original row with the organized row
+		$humanCsv[ $key ]        = $organizedRow;
+		$programmaticCsv[ $key ] = $organizedRow;
 	}
 
 	$writeToCsv( $fileHandle, $humanCsv, true );
@@ -214,11 +295,19 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 
 	foreach ( $programmaticCsv as &$g ) {
 		foreach ( $g as $key => &$value ) {
+			// Remove all SPARKLINE graphs from programmatic CSV.
+			if ( str_contains( $value, 'SPARKLINE' ) ) {
+				unset( $g[ $key ] );
+			}
+
+			/*
 			if ( str_contains( $key, '%' ) ) {
 				$g[ str_replace( '%', 'Percentage', $key ) ] = $value;
 				unset( $g[ $key ] );
 			}
+			*/
 
+			/*
 			if ( $key === 'QIT Integration' ) {
 				// Explode integrations by comma, and them as rows with boolean values and remove original.
 				$integrations = explode( ',', $value );
@@ -227,70 +316,17 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 				}
 				unset( $g[ $key ] );
 			}
+			*/
 		}
 
 		foreach ( $g as $key => &$value ) {
+			$value = rtrim( $value, '%' );
 
-			if ( false && str_contains( $value, 'SPARKLINE' ) ) {
-				/*
-				 * If we are processing any of the uncapped LOC graphs,
-				 * use them to calculate LOCs per Year for the Correlation Heatmap.
-				 */
-				if ( in_array( $key,
-					[
-						'(php) New Lines per Month (Capped at 2500)',
-						'(php) Changed Lines per Month (Capped at 2500)',
-						'(javascript) New Lines per Month (Capped at 2500)',
-						'(javascript) Changed Lines per Month (Capped at 2500)',
-					]
-				) ) {
-					preg_match( '/=SPARKLINE\(\{([^}]+)\}/', $value, $matches );
-					$locs_per_month = explode( ',', $matches[1] );
-
-					$total_locs = array_sum( $locs_per_month );
-
-					$years = ceil( count( $locs_per_month ) / 12 ); // Calculate the number of years
-
-					$percent_locs = [];
-
-					for ( $year = 1; $year <= $years; $year ++ ) {
-						$yearly_sum = 0;
-						for ( $month = 0; $month < 12; $month ++ ) {
-							$index = ( $year - 1 ) * 12 + $month;
-
-							// This is needed for the last year, which might not have 12 months.
-							if ( $index >= count( $locs_per_month ) ) {
-								continue;
-							}
-
-							$yearly_sum += (int) $locs_per_month[ $index ];
-						}
-						$g["LOCs on Year $year"] = $yearly_sum;
-						if ( $yearly_sum > 0 ) {
-							$percent_locs["Percent LOCs on Year $year"] = number_format( ( $yearly_sum / $total_locs ) * 100, 2 );
-						} else {
-							$percent_locs["Percent LOCs on Year $year"] = 0;
-						}
-					}
-					// Add percent LOCs all together.
-					$g = array_merge( $g, $percent_locs );
-				}
-
-				unset( $g[ $key ] );
-			}
-
-			if ( str_ends_with( $value, '%' ) ) {
-				if ( str_contains( $key, 'Percentage' ) ) {
-					$value = rtrim( $value, '%' );
-				} else {
-					$g["{$key} Percentage"] = rtrim( $value, '%' );
-					unset( $g[ $key ] );
-				}
-			}
-
+			/*
 			if ( empty( $value ) ) {
 				$value = 0;
 			}
+			*/
 
 			if ( $key === 'Autoloader' ) {
 				$g['Autoloader'] = $value === 'No' ? 0 : 1;
@@ -318,6 +354,19 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			}
 		}
 
+		/*
+		// To make it clearer when a negative correlation is actually a good thing.
+		$less_is_better = [
+			'Average Class LOC',
+			'Average Method LOC',
+			'Avg Methods per Classes',
+			'Avg. Fields per Class',
+			'Avg. Params per Method',
+			'Average Cyclomatic Complexity',
+			'Change Concentration',
+		];
+		*/
+
 		unset(
 			$g['Extension'],
 			#$g['Aggregated Rating'],
@@ -332,13 +381,34 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			$g['WPORG Installations'],
 			$g['WPORG Supp'],
 			$g['Resolved'],
+			$g['QIT Integration'],
 			$g['Top Changed PHP Files'],
 			#$g['BusFactor'],
+			$g['Tests to PHP LOC'],
 			$g['Resolved Percentage'],
+			$g['Unit Tests to PHP LOC'], // Redundant with Unit Tests to OOP LOC
+			$g['E2E Tests to PHP LOC'], // Redundant with E2E Tests to OOP LOC
+			$g['Playwright Tests'], // Redundant with Playwright LOC
+			$g['wp-browser E2E Tests'], // Redundant with wp-browser E2E LOC
+			$g['wp-browser Unit Tests'], // Redundant with wp-browser Unit LOC
+			$g['PHPUnit Tests'], // Redundant with PHPUnit LOC
 		);
 	}
 
-	$writeToCsv( $fileHandleGpt, $programmaticCsv, false );
+	$writeToCsv( $fileHandleProgrammatic, $programmaticCsv, false );
+
+	// Top 5 are pre-computed and hardcoded for simplicity.
+	$biggestExtensions = [
+		'woocommerce',
+		'mailpoet',
+		'sensei',
+		'wordpress-seo',
+		'automatewoo',
+	];
+
+	$withoutBiggestExtensions = array_diff_key( $programmaticCsv, array_flip( $biggestExtensions ) );
+
+	$writeToCsv( $fileHandleProgrammaticSmall, $withoutBiggestExtensions, false, true );
 } );
 
 load_csv();
@@ -665,6 +735,18 @@ function report_progress( $action ) {
 function evaluate_tests() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		report_progress( 'Evaluating tests' );
+
+		// Initialize all test counters as zero, we will change this if we find tests during processing.
+		$row['wp-browser E2E Tests']  = 0;
+		$row['wp-browser E2E LOC']    = 0;
+		$row['Playwright Tests']      = 0;
+		$row['Playwright LOC']        = 0;
+		$row['Puppeteer E2E Tests']   = 0;
+		$row['Puppeteer E2E LOC']     = 0;
+		$row['PHPUnit LOC']           = 0;
+		$row['PHPUnit Tests']         = 0;
+		$row['wp-browser Unit LOC']   = 0;
+		$row['wp-browser Unit Tests'] = 0;
 
 		$plugin_dir         = $row['PluginDir'];
 		$vendor_directories = $GLOBALS['vendor_directories'];
@@ -1859,13 +1941,42 @@ function evaluate_php_activity_hercules() {
 				// Realign the array starting from the first non-zero month
 				$realignedCounts = array_slice( $lineCountsInt, $startMonth );
 
-				// Calculate the total for the first half and second half
-				$half            = ceil( count( $realignedCounts ) / 2 );
-				$firstHalfTotal  = array_sum( array_slice( $realignedCounts, 0, $half ) );
-				$secondHalfTotal = array_sum( array_slice( $realignedCounts, $half ) );
+				$calculateActivityPercentage = static function ( $slug, $realignedCounts ) use ( $langDisplay ) {
+					// Assume $configurablePercentage is the percentage parameter (e.g., 10, 20, etc.)
+					$configurablePercentage = 49; // for 10 segments (each segment represents 10%)
 
-				// Compare the second half with the first half
-				$halfComparison = $firstHalfTotal ? ( $secondHalfTotal / $firstHalfTotal * 100 ) : 0;
+					// Calculate the number of segments
+					$numSegments = 100 / $configurablePercentage;
+
+					// Calculate the segment size based on the number of segments
+					$segmentSize = ceil( count( $realignedCounts ) / $numSegments );
+
+					// Calculate the total activity for comparison
+					$totalActivity = array_sum( $realignedCounts );
+
+					// Initialize the cumulative total
+					$cumulativeTotal = 0;
+
+					// Split the realigned array into fixed segments and calculate the cumulative activity for each
+					for ( $i = 0; $i < $numSegments; $i ++ ) {
+						$segmentStart    = $i * $segmentSize;
+						$segment         = array_slice( $realignedCounts, $segmentStart, $segmentSize );
+						$segmentTotal    = array_sum( $segment );
+						$cumulativeTotal += $segmentTotal;
+
+						// Calculate the cumulative percentage of the activity up to the current segment
+						$cumulativePercentage = $totalActivity ? $cumulativeTotal / $totalActivity * 100 : 0;
+						$cumulativePercentage = number_format( $cumulativePercentage, 2 );
+
+						// Store each segment's cumulative activity percentage in a separate row
+						$segmentLabel                                                                     = ( $i + 1 ) * $configurablePercentage . '%';
+						$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Up To ' . $segmentLabel ] = $cumulativePercentage . '%';
+					}
+				};
+
+				if ( $lang === 'php' ) {
+					$calculateActivityPercentage( $slug, $realignedCounts );
+				}
 
 				// Split the realigned array into chunks of 12 (each representing a year)
 				$years = array_chunk( $realignedCounts, 12 );
@@ -1896,9 +2007,8 @@ function evaluate_php_activity_hercules() {
 				}
 
 				// Store or use $yearlyActivityPercentages as needed
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]                     = implode( ", ", $yearlyActivityPercentages );
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Avg Compared to 1st Year' ]               = "$average%";
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity 2nd Half Compared to 1st Half' ] = intval( $halfComparison ) . '%';
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]       = implode( ", ", $yearlyActivityPercentages );
+				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Avg Compared to 1st Year' ] = "$average%";
 			}
 		}
 	}
