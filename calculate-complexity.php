@@ -77,6 +77,54 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		fclose( $fileHandle );
 	};
 
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		foreach ( $row as $k => $v ) {
+			if ( preg_match( '/^\((php|javascript)\)\s(New Lines per Month|Changed Lines per Month)$/i', $k, $matches ) ) {
+				$lang = $matches[1];
+
+				$locs_per_month = array_map( 'intval', explode( ',', $v ) );
+
+				$total_locs = array_sum( $locs_per_month );
+
+				$years = ceil( count( $locs_per_month ) / 12 ); // Calculate the number of years
+
+				$absolute_locs = [];
+				$percent_locs  = [];
+
+				for ( $year = 1; $year <= $years; $year ++ ) {
+					$yearly_sum = 0;
+					for ( $month = 0; $month < 12; $month ++ ) {
+						$index = ( $year - 1 ) * 12 + $month;
+
+						// This is needed for the last year, which might not have 12 months.
+						if ( $index >= count( $locs_per_month ) ) {
+							continue;
+						}
+
+						$yearly_sum += (int) $locs_per_month[ $index ];
+					}
+					$absolute_locs["LOCs on Year $year"] = $yearly_sum;
+
+					if ( $yearly_sum > 0 ) {
+						$percent_locs["Percent LOCs on Year $year"] = number_format( ( $yearly_sum / $total_locs ) * 100, 2 );
+					} else {
+						$percent_locs["Percent LOCs on Year $year"] = 0;
+					}
+				}
+
+				/* // We don't deal in absolutes.
+				foreach ( $absolute_locs as $k1 => $v1 ) {
+					$row[ $lang . ' ' . $k1 ] = $v1;
+				}
+				*/
+
+				foreach ( $percent_locs as $k2 => $v2 ) {
+					$row[ $lang . ' ' . $k2 ] = $v2;
+				}
+			}
+		}
+	}
+
 	// Remove rows that do not need to be in the output CSV.
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		unset(
@@ -120,10 +168,10 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 			#$row['(javascript) Changed Lines per Month (Capped at 1000)'],
 
 			# Graph capped at 2500 LOC changes per month. (These are handled in a special way for the Programmatic CSV.)
-			# $row['(php) New Lines per Month (Capped at 2500)'],
-			# $row['(php) Changed Lines per Month (Capped at 2500)'],
-			# $row['(javascript) New Lines per Month (Capped at 2500)'],
-			# $row['(javascript) Changed Lines per Month (Capped at 2500)'],
+			$row['(php) New Lines per Month (Capped at 2500)'],
+			$row['(php) Changed Lines per Month (Capped at 2500)'],
+			$row['(javascript) New Lines per Month (Capped at 2500)'],
+			$row['(javascript) Changed Lines per Month (Capped at 2500)'],
 
 			$row['Public Functions'],
 			$row['Protected/Private Functions'],
@@ -159,13 +207,11 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 
 	// After we did all the operations, let's do some final operations that are specific to human CSV.
 	foreach ( $humanCsv as $key => &$row ) {
-		unset(
-			// We need this values in the programmatic CSV, but we don't want them in the human one.
-			$row['(php) New Lines per Month (Capped at 2500)'],
-			$row['(php) Changed Lines per Month (Capped at 2500)'],
-			$row['(javascript) New Lines per Month (Capped at 2500)'],
-			$row['(javascript) Changed Lines per Month (Capped at 2500)'],
-		);
+		foreach ( $row as $k => $v ) {
+			if ( str_contains( $v, 'SPARKLINE' ) ) {
+				unset( $row[ $k ] );
+			}
+		}
 	}
 
 	$writeToCsv( $fileHandle, $humanCsv, true );
@@ -197,7 +243,8 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 		}
 
 		foreach ( $g as $key => &$value ) {
-			if ( str_contains( $value, 'SPARKLINE' ) ) {
+
+			if ( false && str_contains( $value, 'SPARKLINE' ) ) {
 				/*
 				 * If we are processing any of the uncapped LOC graphs,
 				 * use them to calculate LOCs per Year for the Correlation Heatmap.
@@ -213,7 +260,11 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 					preg_match( '/=SPARKLINE\(\{([^}]+)\}/', $value, $matches );
 					$locs_per_month = explode( ',', $matches[1] );
 
+					$total_locs = array_sum( $locs_per_month );
+
 					$years = ceil( count( $locs_per_month ) / 12 ); // Calculate the number of years
+
+					$percent_locs = [];
 
 					for ( $year = 1; $year <= $years; $year ++ ) {
 						$yearly_sum = 0;
@@ -228,7 +279,14 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 							$yearly_sum += (int) $locs_per_month[ $index ];
 						}
 						$g["LOCs on Year $year"] = $yearly_sum;
+						if ( $yearly_sum > 0 ) {
+							$percent_locs["Percent LOCs on Year $year"] = number_format( ( $yearly_sum / $total_locs ) * 100, 2 );
+						} else {
+							$percent_locs["Percent LOCs on Year $year"] = 0;
+						}
 					}
+					// Add percent LOCs all together.
+					$g = array_merge( $g, $percent_locs );
 				}
 
 				unset( $g[ $key ] );
@@ -251,6 +309,21 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 				$g['Autoloader'] = $value === 'No' ? 0 : 1;
 			}
 
+			if ( $key === 'BusFactor' ) {
+				/*
+				 * 40% foo bar
+				 * 17% bar|baz
+				 * 15% bax qux
+				 */
+				$busFactor = array_map( static function ( $v ): int {
+					return preg_match( '/\d+/', $v, $matches ) ? (int) $matches[0] : 0;
+				}, explode( "\n", $value ) );
+
+				$g['BusFactorSingle']   = $busFactor[0];
+				$g['BusFactorTopThree'] = array_sum( $busFactor );
+				unset( $g[ $key ] );
+			}
+
 			if ( $value === 'Yes' ) {
 				$value = 1;
 			} elseif ( $value === 'No' ) {
@@ -260,16 +333,20 @@ register_shutdown_function( static function () use ( $parallel_index ) {
 
 		unset(
 			$g['Extension'],
-			$g['Aggregated Rating'],
+			#$g['Aggregated Rating'],
 			$g['WPORG Rating'],
 			$g['WOOCOM Rating'],
 			$g['WPORG Rating Count'],
 			$g['WOOCOM Rating Count'],
+			$g['(php) New Lines per Month (Capped at 1000)'],
+			$g['(php) Changed Lines per Month (Capped at 1000)'],
+			$g['(javascript) New Lines per Month (Capped at 1000)'],
+			$g['(javascript) Changed Lines per Month (Capped at 1000)'],
 			$g['WPORG Installations'],
 			$g['WPORG Supp'],
 			$g['Resolved'],
 			$g['Top Changed PHP Files'],
-			$g['BusFactor'],
+			#$g['BusFactor'],
 			$g['Resolved Percentage'],
 		);
 	}
@@ -621,11 +698,11 @@ function evaluate_tests() {
 		];
 
 		$overrides = [
-			'woocommerce'            => [
+			'woocommerce'             => [
 				'e2e'  => 'e2e-pw',
 				'unit' => 'php',
 			],
-			'woocommerce-pre-orders' => [
+			'woocommerce-pre-orders'  => [
 				'unit' => 'includes',
 			],
 			'google-listings-and-ads' => [
@@ -1616,6 +1693,8 @@ function evaluate_php_activity_hercules() {
 
 	foreach ( $languages as $lang ) {
 		$longest_graphs = [];
+		$langDisplay    = $lang === 'php' ? 'PHP' : 'JS';
+
 		foreach ( $GLOBALS['csvData'] as &$row ) {
 			report_progress( "Evaluating $lang Activity" );
 
@@ -1776,7 +1855,7 @@ function evaluate_php_activity_hercules() {
 				}
 			}
 
-			// Calculate development activity over the years
+			// Calculate development activity compared to 1st year.
 			foreach ( $total_lines as $languageKey => $lineCounts ) {
 				// Convert the string numbers in lineCounts to integers
 				$lineCountsInt = array_map( 'intval', $lineCounts );
@@ -1820,8 +1899,6 @@ function evaluate_php_activity_hercules() {
 					// If there's only one year, set average to 100%
 					$average = 100;
 				}
-
-				$langDisplay = $lang === 'php' ? 'PHP' : 'JS';
 
 				// Store or use $yearlyActivityPercentages as needed
 				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]       = implode( ", ", $yearlyActivityPercentages );
