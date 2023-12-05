@@ -85,25 +85,29 @@ def show_old_vs_new(
     debug_log(f"Processed old_lines data: {old_lines}")
 
     # Generate Google Spreadsheet SPARKLINE formulas for uncapped data
-    google_sparkline_new_uncapped = generate_google_sparkline_uncapped(new_lines, 'green')
-    google_sparkline_old_uncapped = generate_google_sparkline_uncapped(old_lines, 'orange')
+    google_sparkline_new_uncapped = generate_google_sparkline_uncapped(new_lines, '#007bff')
+    google_sparkline_old_uncapped = generate_google_sparkline_uncapped(old_lines, '#5bc0de')
 
     print(f"New Lines per Month||||", google_sparkline_new_uncapped)
     print(f"Changed Lines per Month||||", google_sparkline_old_uncapped)
 
-    # Generate Google Spreadsheet SPARKLINE formulas for percentile data
-    google_sparkline_new_percentile = generate_google_sparkline_uncapped(np.minimum(new_lines, np.percentile(new_lines, 99)), 'green')
-    google_sparkline_old_percentile = generate_google_sparkline_uncapped(np.minimum(old_lines, np.percentile(old_lines, 99)), 'orange')
+    percentiles = [50, 90, 95, 99]
 
-    print(f"New Lines per Month (99th percentile)||||", google_sparkline_new_percentile)
-    print(f"Changed Lines per Month (99th percentile)||||", google_sparkline_old_percentile)
+    for percentile in percentiles:
+        # Calculate the sparklines for each percentile
+        google_sparkline_new_percentile = generate_google_sparkline_uncapped(np.minimum(new_lines, np.percentile(new_lines, percentile)), '#007bff')
+        google_sparkline_old_percentile = generate_google_sparkline_uncapped(np.minimum(old_lines, np.percentile(old_lines, percentile)), '#5bc0de')
+
+        # Print the results
+        print(f"New Lines per Month ({percentile}th percentile)||||", google_sparkline_new_percentile)
+        print(f"Changed Lines per Month ({percentile}th percentile)||||", google_sparkline_old_percentile)
 
     new_lines_without_max = np.delete(new_lines, np.argmax(new_lines))
     old_lines_without_max = np.delete(old_lines, np.argmax(old_lines))
 
     # Generate Google Spreadsheet SPARKLINE formulas for trimmed data
-    google_sparkline_new_trimmed = generate_google_sparkline_uncapped(new_lines_without_max, 'green')
-    google_sparkline_old_trimmed = generate_google_sparkline_uncapped(old_lines_without_max, 'orange')
+    google_sparkline_new_trimmed = generate_google_sparkline_uncapped(new_lines_without_max, '#007bff')
+    google_sparkline_old_trimmed = generate_google_sparkline_uncapped(old_lines_without_max, '#5bc0de')
 
     print(f"New Lines per Month (Except highest month)||||", google_sparkline_new_trimmed)
     print(f"Changed Lines per Month (Except highest month)||||", google_sparkline_old_trimmed)
@@ -118,8 +122,8 @@ def show_old_vs_new(
         old_lines_capped = np.clip(old_lines, a_min=None, a_max=cap_value)
 
         # Generate Google Spreadsheet SPARKLINE formulas
-        google_sparkline_new = generate_google_sparkline(new_lines_capped, cap_value, 'green')
-        google_sparkline_old = generate_google_sparkline(old_lines_capped, cap_value, 'orange')
+        google_sparkline_new = generate_google_sparkline(new_lines_capped, cap_value, '#007bff')
+        google_sparkline_old = generate_google_sparkline(old_lines_capped, cap_value, '#5bc0de')
 
         print(f"New Lines per Month (Capped at {cap_value})||||", google_sparkline_new)
         print(f"Changed Lines per Month (Capped at {cap_value})||||", google_sparkline_old)

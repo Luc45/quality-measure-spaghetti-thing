@@ -1,393 +1,22 @@
 <?php
 $GLOBALS['csvData'] = [];
 
-if ( ! isset( $argv[1] ) || ! isset( $argv[2] ) ) {
-	die( "Call this script using parallel.php\n" );
-}
-
-$parallel_repos = $argv[1] ?? null;
-$parallel_index = $argv[2] ?? null;
+$parallel_repos         = $argv[1] ?? null;
+$parallel_index         = $argv[2] ?? 0;
+$GLOBALS['is_parallel'] = ! is_null( $parallel_repos );
 
 $GLOBALS['vendor_directories'] = [
 	'vendor',
 	'node_modules',
 	'vendor_prefixed',
 ];
-$GLOBALS['parallel_repos']     = explode( ',', $parallel_repos );
 
-register_shutdown_function( static function () use ( $parallel_index ) {
-	// Save the data to a CSV File.
-	$humanCsvFile        = __DIR__ . "/human-$parallel_index.csv";
-	$machineCsvFile      = __DIR__ . "/machine-$parallel_index.csv";
-	$machineCsvFileSmall = __DIR__ . "/machine-small-$parallel_index.csv";
-
-	$fileHandle                  = fopen( $humanCsvFile, 'w' );
-	$fileHandleProgrammatic      = fopen( $machineCsvFile, 'w' );
-	$fileHandleProgrammaticSmall = fopen( $machineCsvFileSmall, 'w' );
-
-	// Check if the file was opened successfully.
-	if ( $fileHandle === false ) {
-		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $humanCsvFile ) );
-	}
-
-	if ( $fileHandleProgrammatic === false ) {
-		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleProgrammatic ) );
-	}
-
-	if ( $fileHandleProgrammaticSmall === false ) {
-		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleProgrammaticSmall ) );
-	}
-
-	#evaluate_complexity_score();
-	summarize_size_and_complexity();
-
-	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman, bool $isSmall = false ) {
-		$expected      = $rows[ array_rand( $rows ) ];
-		$expectedCount = count( $expected );
-
-		// Determine the correct headers file based on the flag
-		$headersFile       = $isHuman ? __DIR__ . "/human-headers.csv" : ( $isSmall ? __DIR__ . "/machine-small-headers.csv" : __DIR__ . "/machine-headers.csv" );
-		$headersFileHandle = fopen( $headersFile, 'w' );
-
-		// Check if the headers file was opened successfully
-		if ( $headersFileHandle === false ) {
-			throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $headersFile ) );
-		}
-
-		// Add headers.
-		fputcsv( $headersFileHandle, array_keys( $rows[ array_rand( $rows ) ] ) );
-		fclose( $headersFileHandle );
-
-		foreach ( $rows as $slug => $row ) {
-			// Check if the current row has the expected number of elements
-			if ( count( $row ) !== $expectedCount ) {
-				// Throw an exception if the count is different
-				throw new Exception( "Row count mismatch for slug '$slug'. Expected $expectedCount elements, found " . count( $row ) . ". Missing: " . implode( ',', array_diff_key( $expected, $row ) ) );
-			}
-
-			// Check each item in $row to ensure it's scalar.
-			foreach ( $row as $key => &$value ) {
-				if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
-					throw new InvalidArgumentException( sprintf( 'Non-scalar value encountered at key "%s": %s', $key, print_r( $value, true ) ) );
-				}
-
-				// Make all graph columns same size for consistency.
-				if ( str_contains( $key, 'SPARKLINE' ) ) {
-					unset( $row[ $key ] );
-					$rows[ str_pad( $key, 100, ' ', STR_PAD_RIGHT ) ] = $value;
-				}
-			}
-
-			fputcsv( $fileHandle, $row );
-		}
-		fclose( $fileHandle );
-	};
-
-	// Remove rows that do not need to be in the output CSV.
-	foreach ( $GLOBALS['csvData'] as $k => &$row ) {
-		// Trim all row keys.
-		$row = array_combine( array_map( 'trim', array_keys( $row ) ), $row );
-
-		// Replace "﻿Extension" with "Extension".
-		$row['Extension'] = $row['﻿Extension'];
-		unset( $row['﻿Extension'] );
-
-		unset(
-			$row['PluginDir'],
-			$row['RepoDir'],
-			$row['WPORG URL'],
-			$row['Maintainer'],
-			$row['Repo'],
-			$row['WOOCOM URL'],
-			$row['Dependency Injection'],
-			$row['WOOCOM Installations'],
-
-			# Uncapped Graph. (Comment-out to include in output CSV.)
-			$row['(php) New Lines per Month'],
-			$row['(php) Changed Lines per Month'],
-			$row['(javascript) New Lines per Month'],
-			$row['(javascript) Changed Lines per Month'],
-
-			# Graph normalized to 99th percentile. (Comment-out to include in output CSV.)
-			$row['(php) New Lines per Month (99th percentile)'],
-			$row['(php) Changed Lines per Month (99th percentile)'],
-			$row['(javascript) New Lines per Month (99th percentile)'],
-			$row['(javascript) Changed Lines per Month (99th percentile)'],
-
-			# Uncapped graph, with the highest month removed. (Comment-out to include in output CSV.)
-			$row['(php) Changed Lines per Month (Except highest month)'],
-			$row['(php) New Lines per Month (Except highest month)'],
-			$row['(javascript) New Lines per Month (Except highest month)'],
-			$row['(javascript) Changed Lines per Month (Except highest month)'],
-
-			# Graph capped at 100 LOC changes per month. (Comment-out to include in output CSV.)
-			$row['(php) New Lines per Month (Capped at 100)'],
-			$row['(php) Changed Lines per Month (Capped at 100)'],
-			$row['(javascript) New Lines per Month (Capped at 100)'],
-			$row['(javascript) Changed Lines per Month (Capped at 100)'],
-
-			# Graph capped at 1000 LOC changes per month. (Comment-out to include in output CSV.)
-			#$row['(php) New Lines per Month (Capped at 1000)'],
-			#$row['(php) Changed Lines per Month (Capped at 1000)'],
-			#$row['(javascript) New Lines per Month (Capped at 1000)'],
-			#$row['(javascript) Changed Lines per Month (Capped at 1000)'],
-
-			# Graph capped at 2500 LOC changes per month. (These are handled in a special way for the Programmatic CSV.)
-			$row['(php) New Lines per Month (Capped at 2500)'],
-			$row['(php) Changed Lines per Month (Capped at 2500)'],
-			$row['(javascript) New Lines per Month (Capped at 2500)'],
-			$row['(javascript) Changed Lines per Month (Capped at 2500)'],
-
-			$row['Public Functions'],
-			$row['Protected/Private Functions'],
-			$row['Static Functions'],
-			$row['Slug'],
-			$row['PHP File List'],
-			$row['PHP Activity Over Time'],
-			$row['JS Activity Over Time'],
-			$row['RelativePluginDir'],
-			$row['HerculesWhitelist'],
-			$row['Longest Method LOC'],
-			$row['Longest Class LOC'],
-			$row['Biggest Cyclomatic Complexity'],
-		);
-	}
-
-	$order = [
-		'Extension',
-		'Aggregated Rating',
-		'WPORG Rating',
-		'WOOCOM Rating',
-		'WPORG Rating Count',
-		'WOOCOM Rating Count',
-		'WPORG Installations',
-		'WPORG Supp',
-		'Resolved',
-
-		# Tests
-		'Playwright Tests',
-		'Playwright LOC',
-		'wp-browser E2E Tests',
-		'wp-browser E2E LOC',
-		'Puppeteer E2E Tests',
-		'Puppeteer E2E LOC',
-		'wp-browser Unit Tests',
-		'wp-browser Unit LOC',
-		'PHPUnit Tests',
-		'PHPUnit LOC',
-		'Unit Tests to PHP LOC',
-		'Unit Tests to OOP LOC',
-		'E2E Tests to PHP LOC',
-		'E2E Tests to OOP LOC',
-		'Tests to PHP LOC',
-		// 'Tests to OOP LOC',
-		'Code Style Tests',
-		'QIT Integration',
-
-		# Codebase Structure
-		'Autoloader',
-		'OOP LOCs %',
-		'Static %',
-		'Encapsulated %',
-
-		# Codebase Averages
-		'Codebase Complexity',
-		/*
-		'Average Class LOC',
-		'Average Method LOC',
-		'Avg Methods per Classes',
-		'Avg. Fields per Class',
-		'Avg. Params per Method',
-		'Average Cyclomatic Complexity',
-		*/
-
-		# Codebase Size
-		'Codebase Size',
-		/*
-		'Total Class LOC',
-		'Total Method LOC',
-		'Total Cyclomatic Complexity',
-		'Total Fields',
-		'Total Params',
-		'PHP LOC',
-		'PHP Files',
-		'self::/static::',
-		'Require/Include',
-		'Class Injections',
-		*/
-
-		# Development Activity
-		'BusFactor',
-		'Top Changed PHP Files',
-		'Change Concentration',
-		'(php) New Lines per Month (Capped at 1000)',
-		'(php) Changed Lines per Month (Capped at 1000)',
-		'PHP Activity Up To 49%',
-		'PHP Activity Up To 98%',
-		'PHP Activity Up To 147%',
-		'PHP Avg Compared to 1st Year',
-		'(javascript) New Lines per Month (Capped at 1000)',
-		'(javascript) Changed Lines per Month (Capped at 1000)',
-		'JS Avg Compared to 1st Year',
-	];
-
-	$humanCsv        = [];
-	$programmaticCsv = [];
-
-	foreach ( $GLOBALS['csvData'] as $key => &$row ) {
-		$organizedRow = []; // Initialize an empty array for the organized row
-
-		foreach ( $order as $columnName ) {
-			// Check if the column name exists in the row
-			if ( array_key_exists( $columnName, $row ) ) {
-				// Add the column to the organized row
-				$organizedRow[ $columnName ] = $row[ $columnName ];
-			} else {
-				throw new \LogicException( "Missing column $columnName in row $key" );
-			}
-		}
-
-		// Replace the original row with the organized row
-		$humanCsv[ $key ]        = $organizedRow;
-		$programmaticCsv[ $key ] = $organizedRow;
-	}
-
-	$writeToCsv( $fileHandle, $humanCsv, true );
-
-	$possible_qit_integrations = [
-		'api'        => 'API',
-		'e2e'        => 'E2E',
-		'activation' => 'Activation',
-		'phpstan'    => 'PHPStan',
-		// 'phpcompatibility' => 'PHPCompatibility', // (zero uses it, so it leaves a blank line in the correlation heatmap)
-		'security'   => 'Security'
-	];
-
-	foreach ( $programmaticCsv as &$g ) {
-		foreach ( $g as $key => &$value ) {
-			// Remove all SPARKLINE graphs from programmatic CSV.
-			if ( str_contains( $value, 'SPARKLINE' ) ) {
-				unset( $g[ $key ] );
-			}
-
-			/*
-			if ( str_contains( $key, '%' ) ) {
-				$g[ str_replace( '%', 'Percentage', $key ) ] = $value;
-				unset( $g[ $key ] );
-			}
-			*/
-
-			/*
-			if ( $key === 'QIT Integration' ) {
-				// Explode integrations by comma, and them as rows with boolean values and remove original.
-				$integrations = explode( ',', $value );
-				foreach ( $possible_qit_integrations as $k => $v ) {
-					$g["QIT $v CI"] = in_array( $k, $integrations, true ) ? 1 : 0;
-				}
-				unset( $g[ $key ] );
-			}
-			*/
-		}
-
-		foreach ( $g as $key => &$value ) {
-			$value = rtrim( $value, '%' );
-
-			/*
-			if ( empty( $value ) ) {
-				$value = 0;
-			}
-			*/
-
-			if ( $key === 'Autoloader' ) {
-				$g['Autoloader'] = $value === 'No' ? 0 : 1;
-			}
-
-			if ( $key === 'BusFactor' ) {
-				/*
-				 * 40% foo bar
-				 * 17% bar|baz
-				 * 15% bax qux
-				 */
-				$busFactor = array_map( static function ( $v ): int {
-					return preg_match( '/\d+/', $v, $matches ) ? (int) $matches[0] : 0;
-				}, explode( "\n", $value ) );
-
-				$g['BusFactorSingle']   = $busFactor[0];
-				$g['BusFactorTopThree'] = array_sum( $busFactor );
-				unset( $g[ $key ] );
-			}
-
-			if ( $value === 'Yes' ) {
-				$value = 1;
-			} elseif ( $value === 'No' ) {
-				$value = 0;
-			}
-		}
-
-		/*
-		// To make it clearer when a negative correlation is actually a good thing.
-		$less_is_better = [
-			'Average Class LOC',
-			'Average Method LOC',
-			'Avg Methods per Classes',
-			'Avg. Fields per Class',
-			'Avg. Params per Method',
-			'Average Cyclomatic Complexity',
-			'Change Concentration',
-		];
-		*/
-
-		unset(
-			$g['Extension'],
-			#$g['Aggregated Rating'],
-			$g['WPORG Rating'],
-			$g['WOOCOM Rating'],
-			$g['WPORG Rating Count'],
-			$g['WOOCOM Rating Count'],
-			$g['(php) New Lines per Month (Capped at 1000)'],
-			$g['(php) Changed Lines per Month (Capped at 1000)'],
-			$g['(javascript) New Lines per Month (Capped at 1000)'],
-			$g['(javascript) Changed Lines per Month (Capped at 1000)'],
-			$g['WPORG Installations'],
-			$g['WPORG Supp'],
-			$g['Resolved'],
-			$g['QIT Integration'],
-			$g['Top Changed PHP Files'],
-			#$g['BusFactor'],
-			$g['Tests to PHP LOC'],
-			$g['Resolved Percentage'],
-			$g['Unit Tests to PHP LOC'], // Redundant with Unit Tests to OOP LOC
-			$g['E2E Tests to PHP LOC'], // Redundant with E2E Tests to OOP LOC
-			$g['Playwright Tests'], // Redundant with Playwright LOC
-			$g['Puppeteer E2E Tests'],
-			$g['wp-browser E2E Tests'], // Redundant with wp-browser E2E LOC
-			$g['wp-browser Unit Tests'], // Redundant with wp-browser Unit LOC
-			$g['PHPUnit Tests'], // Redundant with PHPUnit LOC
-			// We will use E2E Tests to OOP LOC instead
-			$g['Playwright LOC'],
-			$g['wp-browser E2E LOC'],
-			$g['Puppeteer E2E LOC'],
-			$g['wp-browser Unit LOC'],
-			$g['PHPUnit LOC'],
-		);
-	}
-
-	$writeToCsv( $fileHandleProgrammatic, $programmaticCsv, false );
-
-	// Top 5 are pre-computed and hardcoded for simplicity.
-	$biggestExtensions = [
-		'woocommerce',
-		'mailpoet',
-		'sensei',
-		'wordpress-seo',
-		'automatewoo',
-		#'woocommerce-payments',
-	];
-
-	$withoutBiggestExtensions = array_diff_key( $programmaticCsv, array_flip( $biggestExtensions ) );
-
-	$writeToCsv( $fileHandleProgrammaticSmall, $withoutBiggestExtensions, false, true );
-} );
+if ( ! is_null( $GLOBALS['parallel_repos'] ) ) {
+	$GLOBALS['parallel_repos'] = explode( ',', $parallel_repos );
+} else {
+	// Get all directories in __DIR__ . '/repos'/
+	$GLOBALS['parallel_repos'] = array_map( 'basename', glob( __DIR__ . '/repos/*', GLOB_ONLYDIR ) );
+}
 
 load_csv();
 maybe_download();
@@ -403,6 +32,7 @@ add_aggregated_rating();
 evaluate_bus_factor();
 evaluate_change_concentration();
 evaluate_php_activity_hercules();
+write( $parallel_index );
 
 function load_csv() {
 	$csvFile = __DIR__ . '/input.csv';
@@ -465,6 +95,7 @@ function find_plugin_entrypoint( $dir ) {
 	$hardcoded_map = [
 		'/repos/woocommerce/'             => 'plugins/woocommerce',
 		'/repos/compatibility-dashboard/' => 'plugins/cd-manager',
+		'/repos/wp-staging-pro/'          => 'src',
 	];
 
 	// See if there's a hardcoded mapping for this repo.
@@ -565,6 +196,7 @@ function evaluate_tests() {
 		$row['wp-browser Unit LOC']   = 0;
 		$row['wp-browser Unit Tests'] = 0;
 
+		$repo_dir           = $row['RepoDir'];
 		$plugin_dir         = $row['PluginDir'];
 		$vendor_directories = $GLOBALS['vendor_directories'];
 		$test_directories   = [
@@ -594,10 +226,17 @@ function evaluate_tests() {
 			'google-listings-and-ads' => [
 				'unit' => 'Unit',
 			],
+			'wp-staging-pro'          => [
+				'tests_dir' => $repo_dir . '/tests',
+				'unit'      => 'wpunit',
+				'e2e'       => 'webdriver',
+			]
 		];
 
-		if ( file_exists( $plugin_dir . '/tests' ) ) {
-			$it = new DirectoryIterator( $plugin_dir . '/tests' );
+		$tests_dir = $overrides[ $row['Slug'] ]['tests_dir'] ?? $plugin_dir . '/tests';
+
+		if ( file_exists( $tests_dir ) ) {
+			$it = new DirectoryIterator( $tests_dir );
 
 			$debug['test_types'] = [
 				'known'   => [],
@@ -1451,11 +1090,14 @@ function evaluate_qit() {
 function correlate_tests_and_code_locs() {
 	foreach ( $GLOBALS['csvData'] as &$row ) {
 		// Use null coalescing operator to set default to 0 if not set
-		$oop_loc        = (int) $row['Total Class LOC'] ?? 0;
-		$code_loc       = (int) $row['PHP LOC'] ?? 0;
-		$unit_test_locs = (int) $row['PHPUnit LOC'] + (int) $row['wp-browser Unit LOC'];
-		$e2e_test_locs  = (int) $row['Playwright LOC'] + (int) $row['Puppeteer E2E LOC'] + (int) $row['wp-browser E2E LOC'];
-		$tests_loc      = $unit_test_locs + $e2e_test_locs;
+		$oop_loc          = (int) $row['Total Class LOC'] ?? 0;
+		$code_loc         = (int) $row['PHP LOC'] ?? 0;
+		$unit_test_locs   = (int) $row['PHPUnit LOC'] + (int) $row['wp-browser Unit LOC'];
+		$e2e_test_locs    = (int) $row['Playwright LOC'] + (int) $row['Puppeteer E2E LOC'] + (int) $row['wp-browser E2E LOC'];
+		$tests_loc        = $unit_test_locs + $e2e_test_locs;
+		$row['Unit LOC']  = $unit_test_locs;
+		$row['E2E LOC']   = $e2e_test_locs;
+		$row['Tests LOC'] = $tests_loc;
 
 		// Calculate the proportions as percentages, using shorthand ternary operator to avoid division by zero
 		$unit_proportion_percentage  = $code_loc > 0 ? ( $unit_test_locs / $code_loc ) * 100 : 0;
@@ -1577,6 +1219,10 @@ function evaluate_php_activity_hercules() {
 		'javascript'
 	];
 
+	$development_activity       = [];
+	$biggest_new_locs_total     = 0;
+	$biggest_changed_locs_total = 0;
+
 	foreach ( $languages as $lang ) {
 		$longest_graphs = [];
 		$langDisplay    = $lang === 'php' ? 'PHP' : 'JS';
@@ -1664,171 +1310,291 @@ function evaluate_php_activity_hercules() {
 			}
 		}
 
-		$development_activity = [];
-
 		foreach ( $longest_graphs as $column => $maxLength ) {
 			foreach ( $GLOBALS['csvData'] as &$row ) {
-				if ( isset( $row[ $column ] ) ) {
-					// Match the numerical data within the SPARKLINE structure
-					if ( preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $row[ $column ], $matches ) ) {
-						$graphNumbers = explode( ',', $matches[1] );
+				// Match the numerical data within the SPARKLINE structure
+				if ( preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $row[ $column ], $matches ) ) {
+					$graphNumbers = explode( ',', $matches[1] );
 
-						$graphNumbers = array_map( 'intval', $graphNumbers );
+					$graphNumbers = array_map( 'intval', $graphNumbers );
 
-						$currentLength = count( $graphNumbers );
+					$currentLength = count( $graphNumbers );
 
-						if ( ! array_key_exists( $row['Slug'], $development_activity ) ) {
-							$development_activity[ $row['Slug'] ] = [];
-						}
-
-						if ( $column === "Changed Lines per Month" ) {
-							$development_activity[ $row['Slug'] ]["{$lang}_changed_lines"] = $graphNumbers;
-						}
-
-						if ( $column === "New Lines per Month" ) {
-							$development_activity[ $row['Slug'] ]["{$lang}_new_lines"] = $graphNumbers;
-						}
-
-						if ( $currentLength < $maxLength ) {
-							// Pad the graph with zeros from the left
-							$padding     = array_fill( 0, $maxLength - $currentLength, '0' );
-							$paddedGraph = implode( ',', array_merge( $padding, $graphNumbers ) );
-						} else {
-							$paddedGraph = $matches[1];
-						}
-
-						unset( $row[ $column ] );
-
-						// Replace the numerical data part of the SPARKLINE string
-						$new_col = sprintf( '(%s) %s', $lang, $column );
-						$new_val = '=SPARKLINE({' . $paddedGraph . '}' . $matches[2];
-
-						if ( $lang === 'javascript' ) {
-							$new_val = str_replace( '007bff', 'ffc107', $new_val );
-							$new_val = str_replace( '5bc0de', 'f0ad4e', $new_val );
-						}
-
-						$row[ $new_col ] = $new_val;
+					if ( $currentLength < $maxLength ) {
+						// Pad the graph with zeros from the left
+						$padding     = array_fill( 0, $maxLength - $currentLength, '0' );
+						$paddedGraph = implode( ',', array_merge( $padding, $graphNumbers ) );
+					} else {
+						$paddedGraph = $matches[1];
 					}
+
+					unset( $row[ $column ] );
+
+					// Replace the numerical data part of the SPARKLINE string
+					$new_col = sprintf( '(%s) %s', $lang, $column );
+					$new_val = '=SPARKLINE({' . $paddedGraph . '}' . $matches[2];
+
+					if ( $lang === 'javascript' ) {
+						$new_val = str_replace( '007bff', 'ffc107', $new_val );
+						$new_val = str_replace( '5bc0de', 'f0ad4e', $new_val );
+					}
+
+					$row[ $new_col ] = $new_val;
+
+					if ( ! array_key_exists( $row['Slug'], $development_activity ) ) {
+						$development_activity[ $row['Slug'] ] = [];
+					}
+
+					if ( ! array_key_exists( $lang, $development_activity[ $row['Slug'] ] ) ) {
+						$development_activity[ $row['Slug'] ][ $lang ] = [];
+					}
+
+					if ( ! array_key_exists( $column, $development_activity[ $row['Slug'] ][ $lang ] ) ) {
+						$development_activity[ $row['Slug'] ][ $lang ][ $column ] = [];
+					}
+
+					if ( ! array_key_exists( 'total_lines', $development_activity[ $row['Slug'] ][ $lang ][ $column ] ) ) {
+						$development_activity[ $row['Slug'] ][ $lang ][ $column ]['total_lines'] = 0;
+					}
+
+					$totalLines = array_sum( $graphNumbers );
+
+					$development_activity[ $row['Slug'] ][ $lang ][ $column ]['total_lines_graph'] = $new_val;
+					$development_activity[ $row['Slug'] ][ $lang ][ $column ]['total_lines']       += $totalLines;
+
+					if ( $column === 'New Lines per Month' && $totalLines > $biggest_new_locs_total ) {
+						$biggest_new_locs_total = $totalLines;
+					}
+					if ( $column === 'Changed Lines per Month' && $totalLines > $biggest_changed_locs_total ) {
+						$biggest_changed_locs_total = $totalLines;
+					}
+
 				}
 			}
 			unset( $row ); // Unset the reference to the last element
 		}
+	}
 
-		foreach ( $development_activity as $slug => $data ) {
-			$total_lines = [];
+	$capSpikesUsingZScore = static function ( array $data, float $zScoreThreshold ) {
+		$mean        = array_sum( $data ) / count( $data );
+		$varianceSum = array_sum( array_map( fn( $value ) => ( $value - $mean ) ** 2, $data ) );
 
-			foreach ( $data as $key => $values ) {
-				// Extract language and type (new or changed)
-				preg_match( '/^(.*)_([a-z]+_lines)$/', $key, $matches );
-				$language = $matches[1];
-				$type     = $matches[2];
+		// Check to prevent division by zero
+		if ( $varianceSum == 0 ) {
+			return $data;
+		}
 
-				// Create a unique key for each language
-				$totalKey = "{$language}_total_lines";
+		$stdDev = sqrt( $varianceSum / count( $data ) );
 
-				if ( ! isset( $total_lines[ $totalKey ] ) ) {
-					$total_lines[ $totalKey ] = array_fill( 0, count( $values ), 0 );
+		foreach ( $data as $key => $value ) {
+			$zScore = ( $value - $mean ) / $stdDev;
+			if ( $zScore > $zScoreThreshold ) {
+				// Cap the value
+				$data[ $key ] = $mean + $zScoreThreshold * $stdDev;
+			}
+		}
+
+		return $data;
+	};
+
+	// Create normalized "New LOCs" and "Changed LOCs" per month.
+	$zScoreThreshold = 1;
+
+	foreach ( $GLOBALS['csvData'] as &$row ) {
+		foreach ( $row as $column => $value ) {
+			if ( preg_match( '/^\((\w+)\) (New|Changed) Lines per Month$/', $column, $matches ) ) {
+				if ( preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $value, $sparklineMatches ) ) {
+					$graphNumbers = explode( ',', $sparklineMatches[1] );
+					$graphNumbers = array_map( 'intval', $graphNumbers );
+
+					// Calculate the 95th percentile value
+					#$normalizedGraph = $capSpikesDynamic( $graphNumbers, $numValuesToCap, $multiplier );
+					$normalizedGraph = $capSpikesUsingZScore( $graphNumbers, $zScoreThreshold );
+
+					// Construct the new sparkline string with capped values
+					$cappedSparkline             = '=SPARKLINE({' . implode( ',', $normalizedGraph ) . '}' . $sparklineMatches[2];
+					$row["$column (Normalized)"] = $cappedSparkline;
+
+
+					$development_activity[ $row['Slug'] ][ $matches[1] ][ str_replace( "({$matches[1]}) ", '', "$column (Normalized)" ) ]['total_lines_graph'] = $cappedSparkline;
+					$development_activity[ $row['Slug'] ][ $matches[1] ][ str_replace( "({$matches[1]}) ", '', "$column (Normalized)" ) ]['total_lines']       = array_sum( $normalizedGraph );
 				}
+			}
+		}
+	}
+	unset( $row ); // Unset the reference to the last element of the array
 
-				// Sum the values
-				foreach ( $values as $index => $value ) {
-					if ( isset( $total_lines[ $totalKey ][ $index ] ) ) {
-						$total_lines[ $totalKey ][ $index ] += $value;
-					} else {
-						$total_lines[ $totalKey ][ $index ] = $value;
+	// Create "Total Lines per Month" column
+	foreach ( $development_activity as $slug => &$langs ) {
+		foreach ( $langs as $lang => &$columns ) {
+			$langDisplay = $lang === 'php' ? 'PHP' : 'JS';
+			foreach ( $columns as $columnName => &$columnData ) {
+				if ( str_contains( $columnName, "New Lines per Month" ) ) {
+					$changedColumnName = str_replace( "New", "Changed", $columnName );
+					$totalColumnName   = str_replace( "New", "Total", $columnName );
+
+					if ( ! array_key_exists( $changedColumnName, $columns ) ) {
+						throw new \LogicException( 'Missing changed column' );
+					}
+
+					$totalLines                                 = $columnData['total_lines'] + $columns[ $changedColumnName ]['total_lines'];
+					$columns[ $totalColumnName ]['total_lines'] = $totalLines;
+
+					// Use the regex to extract sparkline data
+					preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $columnData['total_lines_graph'], $newLinesMatches );
+					preg_match( '/=SPARKLINE\(\{([^}]+)\}(.*)/', $columns[ $changedColumnName ]['total_lines_graph'], $changedLinesMatches );
+
+					$newLinesArray     = explode( ',', $newLinesMatches[1] );
+					$changedLinesArray = explode( ',', $changedLinesMatches[1] );
+					$sparklineOptions  = $newLinesMatches[2]; // Assuming both sparklines have the same options
+
+					// Sum the corresponding values
+					$totalLinesArray = [];
+					foreach ( $newLinesArray as $index => $value ) {
+						$totalValue        = $value + $changedLinesArray[ $index ];
+						$totalLinesArray[] = $totalValue;
+					}
+
+					// Construct the new sparkline
+					$totalLinesSparkline                              = "=SPARKLINE({" . implode( ',', $totalLinesArray ) . "}" . $sparklineOptions . ")";
+					$columns[ $totalColumnName ]['total_lines_graph'] = $totalLinesSparkline;
+				} else {
+					if ( ! str_contains( $columnName, "Changed Lines per Month" ) && ! str_contains( $columnName, 'Total Lines per Month' ) ) {
+						throw new \LogicException( 'Unknown column name.' );
 					}
 				}
 			}
+		}
+	}
+	unset( $langs, $columns, $columnData ); // Unset the references
 
-			// Calculate development activity compared to 1st year.
-			foreach ( $total_lines as $languageKey => $lineCounts ) {
-				// Convert the string numbers in lineCounts to integers
-				$lineCountsInt = array_map( 'intval', $lineCounts );
+	// Calculate development activity.
+	foreach ( $development_activity as $slug => &$langs ) {
+		foreach ( $langs as $lang => &$columns ) {
+			$langDisplay = $lang === 'php' ? 'PHP' : 'JS';
+			foreach ( $columns as $columnName => &$columnData ) {
+				$columnsToAnalyze = [
+					'New Lines per Month (Capped at 5000)'     => 'New',
+					'Changed Lines per Month (Capped at 5000)' => 'Changed',
+					'Total Lines per Month (Capped at 5000)'   => 'Total',
+				];
+
+				if ( ! array_key_exists( $columnName, $columnsToAnalyze ) ) {
+					continue;
+				}
+
+				$type = $columnsToAnalyze[ $columnName ];
+
+				// Extract the line counts from $columnData
+				$lineCountsInt = array_map( 'intval', explode( ',', $columnData['total_lines_graph'] ) );
 
 				// Find the first non-zero month
 				$startMonth = 0;
-				foreach ( $lineCountsInt as $index => $value ) {
+				foreach ( $lineCountsInt as $key => $value ) {
 					if ( $value > 0 ) {
-						$startMonth = $index;
+						$startMonth = $key;
 						break;
 					}
+				}
+
+				if ( $type === 'New' ) {
+					$GLOBALS['csvData'][ $slug ]['First Month of Activity'] = $startMonth + 1;
 				}
 
 				// Realign the array starting from the first non-zero month
 				$realignedCounts = array_slice( $lineCountsInt, $startMonth );
 
-				$calculateActivityPercentage = static function ( $slug, $realignedCounts ) use ( $langDisplay ) {
+				$calculateActivityPercentage = static function ( string $slug, array $realignedCounts, int $totalLines ) use ( $langDisplay, $type ) {
 					// Assume $configurablePercentage is the percentage parameter (e.g., 10, 20, etc.)
-					$configurablePercentage = 49; // for 10 segments (each segment represents 10%)
+					$configurablePercentage = 10; // for 10 segments (each segment represents 10%)
 
 					// Calculate the number of segments
 					$numSegments = 100 / $configurablePercentage;
 
 					// Calculate the segment size based on the number of segments
-					$segmentSize = ceil( count( $realignedCounts ) / $numSegments );
+					$segmentSize = intval( ceil( count( $realignedCounts ) / $numSegments ) );
 
 					// Calculate the total activity for comparison
 					$totalActivity = array_sum( $realignedCounts );
+
+					if ( $totalActivity !== $totalLines ) {
+						//throw new \LogicException( 'Total activity does not match total lines.' );
+						echo "Total activity does not match total lines on slug $slug ($langDisplay).\n";
+					}
 
 					// Initialize the cumulative total
 					$cumulativeTotal = 0;
 
 					// Split the realigned array into fixed segments and calculate the cumulative activity for each
 					for ( $i = 0; $i < $numSegments; $i ++ ) {
-						$segmentStart    = $i * $segmentSize;
-						$segment         = array_slice( $realignedCounts, $segmentStart, $segmentSize );
+						$segmentStart = $i * $segmentSize;
+						$segment      = array_slice( $realignedCounts, $segmentStart, $segmentSize );
+
 						$segmentTotal    = array_sum( $segment );
 						$cumulativeTotal += $segmentTotal;
+
+						// Calculate the non-cumulative percentage of the activity for the current segment
+						$nonCumulativePercentage = $totalActivity ? $segmentTotal / $totalActivity * 100 : 0;
+						$nonCumulativePercentage = number_format( $nonCumulativePercentage, 2 );
 
 						// Calculate the cumulative percentage of the activity up to the current segment
 						$cumulativePercentage = $totalActivity ? $cumulativeTotal / $totalActivity * 100 : 0;
 						$cumulativePercentage = number_format( $cumulativePercentage, 2 );
 
-						// Store each segment's cumulative activity percentage in a separate row
-						$segmentLabel                                                                     = ( $i + 1 ) * $configurablePercentage . '%';
-						$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Up To ' . $segmentLabel ] = $cumulativePercentage . '%';
+						// Segment label
+						$segmentLabel = ( $i + 1 ) * $configurablePercentage . '%';
+
+						// Do not write on last iteratation, as it's highly likely it will be a partial segment.
+						if ( $i === $numSegments - 1 ) {
+							continue;
+						}
+
+						// Store each segment's non-cumulative and cumulative activity percentages
+						$GLOBALS['csvData'][ $slug ][ $langDisplay . " $type LOCs at $segmentLabel of the Project" ] = $nonCumulativePercentage . '%';
+						$GLOBALS['csvData'][ $slug ][ $langDisplay . " Accumulated $type LOCs at " . $segmentLabel ] = $cumulativePercentage . '%';
 					}
 				};
 
-				if ( $lang === 'php' ) {
-					$calculateActivityPercentage( $slug, $realignedCounts );
-				}
+				$calculateYearlyPercentages = static function ( $slug, $realignedCounts ) use ( $langDisplay, $type ) {
+					// Split the realigned array into chunks of 12 (each representing a year)
+					$years = array_chunk( $realignedCounts, 12 );
 
-				// Split the realigned array into chunks of 12 (each representing a year)
-				$years = array_chunk( $realignedCounts, 12 );
+					// Calculate the total of the first 12 months (or the first year's data available)
+					$firstYearTotal = isset( $years[0] ) ? array_sum( $years[0] ) : 0;
 
-				// Calculate the total of the first 12 months (or the first year's data available)
-				$firstYearTotal = isset( $years[0] ) ? array_sum( $years[0] ) : 0;
+					// Initialize an array to store activity percentages for each year
+					$yearlyActivityPercentages = [];
 
-				// Initialize an array to store activity percentages for each year
-				$yearlyActivityPercentages = [];
+					foreach ( $years as $year ) {
+						// Calculate the total activity for each year
+						$yearTotal = array_sum( $year );
 
-				foreach ( $years as $year ) {
-					// Calculate the total activity for each year
-					$yearTotal = array_sum( $year );
+						// Calculate the percentage relative to the first year total
+						$percentage                  = $firstYearTotal ? ( $yearTotal / $firstYearTotal * 100 ) : 0;
+						$yearlyActivityPercentages[] = intval( $percentage ) . '%';
+					}
 
-					// Calculate the percentage relative to the first year total
-					$percentage                  = $firstYearTotal ? ( $yearTotal / $firstYearTotal * 100 ) : 0;
-					$yearlyActivityPercentages[] = intval( $percentage ) . '%';
-				}
+					// Calculate the average activity compared to the first year
+					// Exclude the first year (100%) from the average calculation
+					if ( count( $yearlyActivityPercentages ) > 1 ) {
+						$sumPercentages = array_sum( array_slice( $yearlyActivityPercentages, 1 ) );
+						$average        = $sumPercentages / ( count( $yearlyActivityPercentages ) - 1 );
+					} else {
+						// If there's only one year, set average to 100%
+						$average = 100;
+					}
 
-				// Calculate the average activity compared to the first year
-				// Exclude the first year (100%) from the average calculation
-				if ( count( $yearlyActivityPercentages ) > 1 ) {
-					$sumPercentages = array_sum( array_slice( $yearlyActivityPercentages, 1 ) );
-					$average        = $sumPercentages / ( count( $yearlyActivityPercentages ) - 1 );
-				} else {
-					// If there's only one year, set average to 100%
-					$average = 100;
-				}
+					// Store or use $yearlyActivityPercentages as needed
+					$GLOBALS['csvData'][ $slug ][ $langDisplay . " $type New LOCs Over Time" ]            = implode( ", ", $yearlyActivityPercentages );
+					$GLOBALS['csvData'][ $slug ][ $langDisplay . " $type LOCs Avg Compared to 1st Year" ] = "$average%";
+				};
 
-				// Store or use $yearlyActivityPercentages as needed
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Activity Over Time' ]       = implode( ", ", $yearlyActivityPercentages );
-				$GLOBALS['csvData'][ $slug ][ $langDisplay . ' Avg Compared to 1st Year' ] = "$average%";
+				$calculateActivityPercentage( $slug, $realignedCounts, $columnData['total_lines'] );
+				$calculateYearlyPercentages( $slug, $realignedCounts );
 			}
 		}
 	}
+	unset( $langs, $columns, $columnData ); // Unset the references
 }
 
 function evaluate_change_concentration() {
@@ -1939,7 +1705,522 @@ function summarize_size_and_complexity() {
 			return $complexity_total;
 		};
 
-		$row['Codebase Size']         = $calculate_codebase_size( $row );
-		$row['Codebase Complexity']   = $calculate_complexity( $row );
+		$row['Codebase Size']       = $calculate_codebase_size( $row );
+		$row['Codebase Complexity'] = $calculate_complexity( $row );
 	}
+}
+
+function write( int $parallel_index ) {
+	// Save the data to a CSV File.
+	if ( $GLOBALS['is_parallel'] ) {
+		$humanCsvFile        = __DIR__ . "/human-$parallel_index.csv";
+		$machineCsvFile      = __DIR__ . "/machine-$parallel_index.csv";
+		$machineCsvFileSmall = __DIR__ . "/machine-small-$parallel_index.csv";
+	} else {
+		$humanCsvFile        = __DIR__ . "/human.csv";
+		$machineCsvFile      = __DIR__ . "/machine.csv";
+		$machineCsvFileSmall = __DIR__ . "/machine-small.csv";
+	}
+
+	$fileHandle                  = fopen( $humanCsvFile, 'w' );
+	$fileHandleProgrammatic      = fopen( $machineCsvFile, 'w' );
+	$fileHandleProgrammaticSmall = fopen( $machineCsvFileSmall, 'w' );
+
+	// Check if the file was opened successfully.
+	if ( $fileHandle === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $humanCsvFile ) );
+	}
+
+	if ( $fileHandleProgrammatic === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleProgrammatic ) );
+	}
+
+	if ( $fileHandleProgrammaticSmall === false ) {
+		throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $fileHandleProgrammaticSmall ) );
+	}
+
+	#evaluate_complexity_score();
+	summarize_size_and_complexity();
+
+	$writeToCsv = static function ( $fileHandle, array $rows, bool $isHuman, bool $isSmall = false ) {
+		$expected      = $rows[ array_rand( $rows ) ];
+		$expectedCount = count( $expected );
+
+		foreach ( $rows as $slug => $row ) {
+			// Check if the current row has the expected number of elements
+			if ( count( $row ) !== $expectedCount ) {
+				// Throw an exception if the count is different
+				throw new Exception( "Row count mismatch for slug '$slug'. Expected $expectedCount elements, found " . count( $row ) . ". Missing: " . implode( ',', array_diff_key( $expected, $row ) ) );
+			}
+
+			// Check each item in $row to ensure it's scalar.
+			foreach ( $row as $key => &$value ) {
+				if ( ! is_scalar( $value ) && ! is_null( $value ) ) {  // Allow scalars and NULL values.
+					throw new InvalidArgumentException( sprintf( 'Non-scalar value encountered at key "%s": %s', $key, print_r( $value, true ) ) );
+				}
+
+				// Make all graph columns same size for consistency.
+				if ( str_contains( $value, 'SPARKLINE' ) && ! array_key_exists( str_pad( $key, 100, ' ' ), $rows[ $slug ] ) ) {
+					$rows[ $slug ][ str_pad( $key, 100, ' ' ) ] = $value;
+					unset( $rows[ $slug ][ $key ] );
+				}
+			}
+		}
+
+		unset( $expected );
+		unset( $expectedCount );
+
+		if ( $GLOBALS['is_parallel'] ) {
+			// Determine the correct headers file based on the flag
+			$headersFile       = $isHuman ? __DIR__ . "/human-headers.csv" : ( $isSmall ? __DIR__ . "/machine-small-headers.csv" : __DIR__ . "/machine-headers.csv" );
+			$headersFileHandle = fopen( $headersFile, 'w' );
+
+			// Check if the headers file was opened successfully
+			if ( $headersFileHandle === false ) {
+				throw new RuntimeException( sprintf( 'Unable to open file for writing: %s', $headersFile ) );
+			}
+
+			// Add headers.
+			fputcsv( $headersFileHandle, array_keys( $rows[ array_rand( $rows ) ] ) );
+			fclose( $headersFileHandle );
+
+			foreach ( $rows as $slug => $row ) {
+				fputcsv( $fileHandle, $row );
+			}
+		} else {
+			// Non-parallel logic
+			fputcsv( $fileHandle, array_keys( $rows[ array_rand( $rows ) ] ) );
+
+			foreach ( $rows as $row ) {
+				fputcsv( $fileHandle, $row );
+			}
+		}
+
+		fclose( $fileHandle );
+	};
+
+	// Remove rows that do not need to be in the output CSV.
+	foreach ( $GLOBALS['csvData'] as $k => &$row ) {
+		// Trim all row keys.
+		$row = array_combine( array_map( 'trim', array_keys( $row ) ), $row );
+
+		// Replace "﻿Extension" with "Extension".
+		$row['Extension'] = $row['﻿Extension'];
+		unset( $row['﻿Extension'] );
+
+		/*
+		unset(
+			$row['PluginDir'],
+			$row['RepoDir'],
+			$row['WPORG URL'],
+			$row['Maintainer'],
+			$row['Repo'],
+			$row['WOOCOM URL'],
+			$row['Dependency Injection'],
+			$row['WOOCOM Installations'],
+
+			# Uncapped Graph. (Comment-out to include in output CSV.)
+			$row['(php) New Lines per Month'],
+			$row['(php) Changed Lines per Month'],
+			$row['(javascript) New Lines per Month'],
+			$row['(javascript) Changed Lines per Month'],
+
+			# Graph normalized to 95th percentile. (Comment-out to include in output CSV.)
+			$row['(php) New Lines per Month (95th percentile)'],
+			$row['(php) Changed Lines per Month (95th percentile)'],
+			$row['(javascript) New Lines per Month (95th percentile)'],
+			$row['(javascript) Changed Lines per Month (95th percentile)'],
+
+			# Uncapped graph, with the highest month removed. (Comment-out to include in output CSV.)
+			$row['(php) Changed Lines per Month (Except highest month)'],
+			$row['(php) New Lines per Month (Except highest month)'],
+			$row['(javascript) New Lines per Month (Except highest month)'],
+			$row['(javascript) Changed Lines per Month (Except highest month)'],
+
+			# Graph capped at 100 LOC changes per month. (Comment-out to include in output CSV.)
+			$row['(php) New Lines per Month (Capped at 100)'],
+			$row['(php) Changed Lines per Month (Capped at 100)'],
+			$row['(javascript) New Lines per Month (Capped at 100)'],
+			$row['(javascript) Changed Lines per Month (Capped at 100)'],
+
+			# Graph capped at 1000 LOC changes per month. (Comment-out to include in output CSV.)
+			#$row['(php) New Lines per Month (Capped at 1000)'],
+			#$row['(php) Changed Lines per Month (Capped at 1000)'],
+			#$row['(javascript) New Lines per Month (Capped at 1000)'],
+			#$row['(javascript) Changed Lines per Month (Capped at 1000)'],
+
+			# Graph capped at 2500 LOC changes per month. (These are handled in a special way for the Programmatic CSV.)
+			$row['(php) New Lines per Month (Capped at 2500)'],
+			$row['(php) Changed Lines per Month (Capped at 2500)'],
+			$row['(javascript) New Lines per Month (Capped at 2500)'],
+			$row['(javascript) Changed Lines per Month (Capped at 2500)'],
+
+			$row['Public Functions'],
+			$row['Protected/Private Functions'],
+			$row['Static Functions'],
+			$row['Slug'],
+			$row['PHP File List'],
+			$row['PHP Activity Over Time'],
+			$row['JS Activity Over Time'],
+			$row['RelativePluginDir'],
+			$row['HerculesWhitelist'],
+			$row['Longest Method LOC'],
+			$row['Longest Class LOC'],
+			$row['Biggest Cyclomatic Complexity'],
+		);
+		*/
+	}
+
+	$maintainers = [
+		'Composite Products'                 => 'SomewhereWarm',
+		'Product Bundles'                    => 'SomewhereWarm',
+		'All Products for Woo Subscriptions' => 'SomewhereWarm',
+		'Product Recommendations'            => 'SomewhereWarm',
+		'Back In Stock Notifications'        => 'SomewhereWarm',
+		'Gift Cards'                         => 'SomewhereWarm',
+		'Conditional Shipping and Payments'  => 'SomewhereWarm',
+
+		'Yoast SEO'                                               => 'Yoast',
+		'WooCommerce'                                             => 'WooCommerce',
+		'MailPoet – Newsletters, Email Marketing, and Automation' => 'MailPoet',
+
+		'Table Rate Shipping'         => 'Rubik?',
+		'Shipment Tracking'           => 'Rubik?',
+		'Product Add-Ons'             => 'Rubik?',
+		'Checkout Field Editor'       => 'Rubik?',
+		'ShipStation for WooCommerce' => 'Rubik?',
+
+		'AutomateWoo' => 'AutomateWoo',
+
+		'WooCommerce Google Analytics' => 'Automata',
+
+		'Payfast Payment Gateway' => '10up',
+		'Eway'                    => '10up',
+
+		'Stripe' => 'Roy',
+
+		'WooPayments' => 'Transact',
+
+		'Woo Subscriptions' => 'Quark',
+
+		'UPS Shipping Method' => 'Extendable',
+
+		'Pinterest for WooCommerce' => 'Ventures',
+
+
+		'Google Listings & Ads'                   => '',
+		'WooCommerce Points and Rewards'          => '',
+		'WooCommerce Bookings'                    => '',
+		'Product Vendors'                         => '',
+		'Xero'                                    => '',
+		'Square'                                  => '',
+		'PayPal Braintree'                        => '',
+		'WooCommerce Block'                       => '',
+		'Facebook for WooCommerce'                => '',
+		'WooCommerce Accommodation Bookings'      => '',
+		'WooCommerce Deposits'                    => '',
+		'Affirm Payments'                         => '',
+		'WooCommerce Distance Rate Shipping'      => '',
+		'Canada Post Shipping Method'             => '',
+		'Returns and Warranty Requests'           => '',
+		'Australia Post Shipping Method'          => '',
+		'Product CSV Import Suite'                => '',
+		'WooCommerce Coupon Campaigns'            => '',
+		'Shipping Multiple Addresses'             => '',
+		'Min/Max Quantities'                      => '',
+		'GoCardless'                              => '',
+		'Advanced Notification'                   => '',
+		'FedEx Shipping Method'                   => '',
+		'USPS Shipping Method'                    => '',
+		'WooCommerce Order Barcodes'              => '',
+		'WooCommerce Stamps.com API'              => '',
+		'Bulk Stock Management'                   => '',
+		'Per Product Shipping'                    => '',
+		'WooCommerce Brands'                      => '',
+		'EU VAT Number'                           => '',
+		'WooCommerce One Page Checkout'           => '',
+		'WooCommerce Box Office'                  => '',
+		'WooCommerce Pre-Orders'                  => '',
+		'Gifting for Woo Subscriptions'           => '',
+		'Sensei Pro (WC Paid Courses)'            => '',
+		'Royal Mail'                              => '',
+		'Flat Rate Box Shipping'                  => '',
+		'WooCommerce Shipping'                    => '',
+		'Woo Subscription Downloads'              => '',
+		'WooCommerce Purchase Order Gateway'      => '',
+		'QIT Manager'                             => '',
+		'WooCommerce Additional Variation Images' => '',
+		'AutomateWoo – Refer A Friend add-on'     => '',
+		'AutomateWoo – Birthdays add-on'          => '',
+		'WooCommerce Bookings Availability'       => '',
+	];
+
+	$order = [
+		'Extension',
+		'Aggregated Rating',
+		'WPORG Rating',
+		'WOOCOM Rating',
+		'WPORG Rating Count',
+		'WOOCOM Rating Count',
+		'WPORG Installations',
+		'WPORG Supp',
+		'Resolved',
+
+		# Tests
+		'Playwright Tests',
+		'Playwright LOC',
+		'wp-browser E2E Tests',
+		'wp-browser E2E LOC',
+		'Puppeteer E2E Tests',
+		'Puppeteer E2E LOC',
+		'wp-browser Unit Tests',
+		'wp-browser Unit LOC',
+		'PHPUnit Tests',
+		'PHPUnit LOC',
+		'E2E LOC',
+		'Unit LOC',
+		'Tests LOC',
+		'Unit Tests to PHP LOC',
+		'Unit Tests to OOP LOC',
+		'E2E Tests to PHP LOC',
+		'E2E Tests to OOP LOC',
+		'Tests to OOP LOC',
+		'Code Style Tests',
+		'QIT Integration',
+
+		# Codebase Structure
+		'Autoloader',
+		'OOP LOCs %',
+		'Static %',
+		'Encapsulated %',
+
+		# Codebase Averages
+		'Codebase Complexity',
+		'Average Class LOC',
+		'Average Method LOC',
+		'Avg Methods per Classes',
+		'Avg. Fields per Class',
+		'Avg. Params per Method',
+		'Average Cyclomatic Complexity',
+
+		# Codebase Size
+		'Codebase Size',
+		/*
+		'Total Class LOC',
+		'Total Method LOC',
+		'Total Cyclomatic Complexity',
+		'Total Fields',
+		'Total Params',
+		'PHP LOC',
+		'PHP Files',
+		'self::/static::',
+		*/
+		'Require/Include',
+		'Class Injections',
+
+		# Development Activity
+		'First Month of Activity',
+		'BusFactor',
+		'Top Changed PHP Files',
+		'Change Concentration',
+		'(php) New Lines per Month (Except highest month)',
+		'(php) New Lines per Month (Capped at 1000)',
+		'(php) Changed Lines per Month (Except highest month)',
+		'(php) Changed Lines per Month (Capped at 1000)',
+		'(javascript) New Lines per Month (Except highest month)',
+		'(javascript) New Lines per Month (Capped at 1000)',
+		'(javascript) Changed Lines per Month (Except highest month)',
+		'(javascript) Changed Lines per Month (Capped at 1000)',
+
+		// '/(php|js) (New|Changed) LOCs Over Time/i', // $langDisplay . " $type New LOCs Over Time"
+		'/[MACHINE](php|js) Total LOCs Avg Compared to 1st Year/i', // $langDisplay . " $type LOCs Avg Compared to 1st Year"
+		'/[MACHINE](php|js) Total LOCs at .+/i', // $langDisplay . " $type LOCs at $segmentLabel of the Project"
+		'/[MACHINE](php|js) Accumulated New LOCs at .+/i', // $langDisplay . " Accumulated $type LOCs at " . $segmentLabel
+	];
+
+	$humanCsv        = [];
+	$programmaticCsv = [];
+
+	foreach ( $GLOBALS['csvData'] as $key => &$row ) {
+		foreach ( $order as $columnNamePattern ) {
+			// Check if $columnNamePattern is a regex pattern
+			if ( strpos( $columnNamePattern, '/' ) === 0 ) { // Assuming regex patterns start with '/'
+				$machineOnly = false;
+
+				if ( str_contains( $columnNamePattern, '[MACHINE]' ) ) {
+					$columnNamePattern = str_replace( '[MACHINE]', '', $columnNamePattern );
+					$machineOnly       = true;
+				}
+
+				foreach ( $row as $rowKey => $rowValue ) {
+					if ( preg_match( $columnNamePattern, $rowKey ) ) {
+						$rowKey = str_replace( 'Total', 'New/Changed/Removed', $rowKey );
+						// Add matching columns to organizedRow
+						$programmaticCsv[ $key ][ $rowKey ] = $rowValue;
+						if ( ! $machineOnly ) {
+							$humanCsv[ $key ][ $rowKey ] = $rowValue;
+						}
+					}
+				}
+			} else {
+				// Standard handling for exact column names
+				if ( array_key_exists( $columnNamePattern, $row ) ) {
+					$humanCsv[ $key ][ $columnNamePattern ]        = $row[ $columnNamePattern ];
+					$programmaticCsv[ $key ][ $columnNamePattern ] = $row[ $columnNamePattern ];
+				} else {
+					throw new \LogicException( "Missing column $columnNamePattern in row $key" );
+				}
+			}
+		}
+	}
+
+	// Remove columns from $humanCSV;
+	foreach ( $humanCsv as $slug => &$row ) {
+		unset(
+			$row['PHP File List'],
+			$row['PHP Activity Over Time'],
+			$row['JS Activity Over Time'],
+			$row['RelativePluginDir'],
+			$row['HerculesWhitelist'],
+			$row['Longest Method LOC'],
+			$row['Longest Class LOC'],
+			$row['Biggest Cyclomatic Complexity'],
+		);
+	}
+
+	$writeToCsv( $fileHandle, $humanCsv, true );
+
+	$possible_qit_integrations = [
+		'api'        => 'API',
+		'e2e'        => 'E2E',
+		'activation' => 'Activation',
+		'phpstan'    => 'PHPStan',
+		// 'phpcompatibility' => 'PHPCompatibility', // (zero uses it, so it leaves a blank line in the correlation heatmap)
+		'security'   => 'Security'
+	];
+
+	foreach ( $programmaticCsv as &$g ) {
+		foreach ( $g as $key => &$value ) {
+			// Remove all SPARKLINE graphs from programmatic CSV.
+			if ( str_contains( $value, 'SPARKLINE' ) ) {
+				unset( $g[ $key ] );
+			}
+
+			/*
+			if ( str_contains( $key, '%' ) ) {
+				$g[ str_replace( '%', 'Percentage', $key ) ] = $value;
+				unset( $g[ $key ] );
+			}
+			*/
+
+			/*
+			if ( $key === 'QIT Integration' ) {
+				// Explode integrations by comma, and them as rows with boolean values and remove original.
+				$integrations = explode( ',', $value );
+				foreach ( $possible_qit_integrations as $k => $v ) {
+					$g["QIT $v CI"] = in_array( $k, $integrations, true ) ? 1 : 0;
+				}
+				unset( $g[ $key ] );
+			}
+			*/
+		}
+
+		foreach ( $g as $key => &$value ) {
+			$value = rtrim( $value, '%' );
+
+			/*
+			if ( empty( $value ) ) {
+				$value = 0;
+			}
+			*/
+
+			if ( $key === 'Autoloader' ) {
+				$g['Autoloader'] = $value === 'No' ? 0 : 1;
+			}
+
+			if ( $key === 'BusFactor' ) {
+				/*
+				 * 40% foo bar
+				 * 17% bar|baz
+				 * 15% bax qux
+				 */
+				$busFactor = array_map( static function ( $v ): int {
+					return preg_match( '/\d+/', $v, $matches ) ? (int) $matches[0] : 0;
+				}, explode( "\n", $value ) );
+
+				$g['BusFactorSingle']   = $busFactor[0];
+				$g['BusFactorTopThree'] = array_sum( $busFactor );
+				unset( $g[ $key ] );
+			}
+
+			if ( $value === 'Yes' ) {
+				$value = 1;
+			} elseif ( $value === 'No' ) {
+				$value = 0;
+			}
+		}
+
+		/*
+		// To make it clearer when a negative correlation is actually a good thing.
+		$less_is_better = [
+			'Average Class LOC',
+			'Average Method LOC',
+			'Avg Methods per Classes',
+			'Avg. Fields per Class',
+			'Avg. Params per Method',
+			'Average Cyclomatic Complexity',
+			'Change Concentration',
+		];
+		*/
+
+		unset(
+			$g['Extension'],
+			#$g['Aggregated Rating'],
+			$g['WPORG Rating'],
+			$g['WOOCOM Rating'],
+			$g['WPORG Rating Count'],
+			$g['WOOCOM Rating Count'],
+			$g['(php) New Lines per Month (Capped at 1000)'],
+			$g['(php) Changed Lines per Month (Capped at 1000)'],
+			$g['(javascript) New Lines per Month (Capped at 1000)'],
+			$g['(javascript) Changed Lines per Month (Capped at 1000)'],
+			$g['WPORG Installations'],
+			$g['WPORG Supp'],
+			$g['Resolved'],
+			$g['QIT Integration'],
+			$g['Top Changed PHP Files'],
+			#$g['BusFactor'],
+			$g['Tests to PHP LOC'],
+			$g['Resolved Percentage'],
+			$g['Unit Tests to PHP LOC'], // Redundant with Unit Tests to OOP LOC
+			$g['E2E Tests to PHP LOC'], // Redundant with E2E Tests to OOP LOC
+			$g['Playwright Tests'], // Redundant with Playwright LOC
+			$g['Puppeteer E2E Tests'],
+			$g['wp-browser E2E Tests'], // Redundant with wp-browser E2E LOC
+			$g['wp-browser Unit Tests'], // Redundant with wp-browser Unit LOC
+			$g['PHPUnit Tests'], // Redundant with PHPUnit LOC
+			// We will use E2E Tests to OOP LOC instead
+			$g['Playwright LOC'],
+			$g['wp-browser E2E LOC'],
+			$g['Puppeteer E2E LOC'],
+			$g['wp-browser Unit LOC'],
+			$g['PHPUnit LOC'],
+		);
+	}
+
+	$writeToCsv( $fileHandleProgrammatic, $programmaticCsv, false );
+
+	// Top 5 are pre-computed and hardcoded for simplicity.
+	$biggestExtensions = [
+		'woocommerce',
+		'mailpoet',
+		'sensei',
+		'wordpress-seo',
+		'automatewoo',
+		#'woocommerce-payments',
+	];
+
+	$withoutBiggestExtensions = array_diff_key( $programmaticCsv, array_flip( $biggestExtensions ) );
+
+	$writeToCsv( $fileHandleProgrammaticSmall, $withoutBiggestExtensions, false, true );
 }

@@ -5,6 +5,7 @@ def process_and_generate_heatmap(file_path, identifier=''):
     # Adjust file names based on the identifier
     base_filename = f"{file_path.split('/')[-1].split('.')[0]}{identifier}"
     txt_filename = f"correlation-heatmap-{base_filename}.txt"
+    partial_html_filename = f"partial_correlation_heatmap-{base_filename}.html"
     html_filename = f"correlation_heatmap-{base_filename}.html"
     png_filename = f"correlation_heatmap-{base_filename}.png"
 
@@ -14,10 +15,16 @@ def process_and_generate_heatmap(file_path, identifier=''):
         # Read the CSV file
         data = pd.read_csv(file_path)
 
+        # Remove rows with missing values
+        data = data.dropna()
+
+        # Remove constant columns
+        data = data.loc[:, data.std() > 0]
+
         # Check if 'Aggregated Rating' is in the columns
-        if 'Aggregated Rating' in data.columns:
+        if 'Static %' in data.columns:
             # Calculate the correlation of 'Aggregated Rating' with other features
-            correlation_with_aggregated_rating = data.corrwith(data['Aggregated Rating']).drop('Aggregated Rating')
+            correlation_with_aggregated_rating = data.corrwith(data['Static %']).drop('Static %')
 
             # Convert the correlation Series to a string for easy display
             correlation_text = correlation_with_aggregated_rating.to_string()
@@ -184,6 +191,37 @@ def process_and_generate_heatmap(file_path, identifier=''):
     # Open the HTML file in append mode and write the JavaScript
     with open(html_filename, "a") as file:
         file.write(javascript_script)
+
+
+    ## Partial Correlations
+    ## Select only relevant correlations for the partial heatmap
+    #variables_of_interest = ['Tests LOC', 'PHP Dev Activity (20% - Non-cumulative)', 'PHP Dev Activity (40% - Non-cumulative)', 'PHP Dev Activity (60% - Non-cumulative)', 'PHP Dev Activity (80% - Non-cumulative)']
+    #selected_correlation_matrix = correlation_matrix.loc[variables_of_interest, variables_of_interest]
+#
+    ## Generate a heatmap for selected correlations
+    #fig_partial = px.imshow(selected_correlation_matrix,
+    #                        labels=dict(x="Variable 1", y="Variable 2", color="Correlation"),
+    #                        x=selected_correlation_matrix.columns,
+    #                        y=selected_correlation_matrix.columns,
+    #                        text_auto=True,
+    #                        color_continuous_scale=custom_colorscale
+    #                        )
+#
+    ## Update layout for the partial heatmap (similar to the full heatmap)
+    #fig_partial.update_layout(
+    #    title="Partial Correlation Heatmap",
+    #    autosize=False,
+    #    width=1000,  # Adjusted width for the smaller matrix
+    #    height=1000,  # Adjusted height for the smaller matrix
+    #    xaxis_showgrid=False,
+    #    yaxis_showgrid=False,
+    #    xaxis=dict(tickangle=-45, side="bottom", fixedrange=True),
+    #    yaxis=dict(tickangle=0, fixedrange=True),
+    #    margin=dict(l=10, r=10, b=10, t=50)
+    #)
+#
+    ## Save the partial heatmap as an HTML file
+    #fig_partial.write_html(partial_html_filename)
 
 process_and_generate_heatmap('../machine.csv')
 process_and_generate_heatmap('../machine-small.csv')
